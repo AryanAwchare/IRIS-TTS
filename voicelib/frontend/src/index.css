@@ -1,0 +1,120 @@
+@tailwind base;
+@tailwind components;
+@tailwind utilities;
+
+/* ── Global base ────────────────────────────────────────────────────────── */
+@layer base {
+  *, *::before, *::after { box-sizing: border-box; }
+
+  html {
+    -webkit-font-smoothing: antialiased;
+    -moz-osx-font-smoothing: grayscale;
+    scroll-behavior: smooth;
+  }
+
+  body {
+    @apply bg-surface-950 text-surface-50 font-sans;
+    background-image:
+      radial-gradient(ellipse 80% 50% at 20% -10%, rgba(79,126,248,0.12) 0%, transparent 60%),
+      radial-gradient(ellipse 60% 40% at 80% 110%, rgba(139,92,246,0.08) 0%, transparent 60%);
+    min-height: 100dvh;
+  }
+
+  /* Custom scrollbar */
+  ::-webkit-scrollbar { width: 6px; }
+  ::-webkit-scrollbar-track { background: transparent; }
+  ::-webkit-scrollbar-thumb { @apply bg-surface-700 rounded-full; }
+  ::-webkit-scrollbar-thumb:hover { @apply bg-surface-200; }
+}
+
+/* ── Component layer ─────────────────────────────────────────────────────── */
+@layer components {
+
+  /* Double-Bezel card (Doppelrand) */
+  .card-shell {
+    @apply bg-white/[0.04] border border-white/[0.09] rounded-4xl p-[2px];
+    box-shadow: inset 0 1px 1px rgba(255,255,255,0.08);
+  }
+  .card-inner {
+    @apply bg-surface-900/90 rounded-[calc(2rem-2px)] p-6 sm:p-8;
+    backdrop-filter: blur(16px);
+  }
+
+  /* Glass pill nav */
+  .nav-pill {
+    @apply fixed top-5 left-1/2 -translate-x-1/2 z-50;
+    @apply bg-white/[0.06] backdrop-blur-2xl border border-white/[0.12];
+    @apply rounded-full px-5 py-2.5 flex items-center gap-2;
+    box-shadow: 0 8px 32px rgba(0,0,0,0.4), inset 0 1px 0 rgba(255,255,255,0.1);
+  }
+
+  /* Button-in-Button pill CTA */
+  .btn-primary {
+    @apply inline-flex items-center gap-3 rounded-full px-7 py-3.5;
+    @apply bg-primary-500 text-white font-semibold text-base;
+    @apply transition-all duration-500 ease-spring;
+    @apply hover:bg-primary-600 hover:shadow-glow active:scale-[0.97];
+    @apply disabled:opacity-40 disabled:cursor-not-allowed disabled:pointer-events-none;
+  }
+
+  .btn-secondary {
+    @apply inline-flex items-center gap-2 rounded-full px-6 py-3;
+    @apply bg-white/[0.08] border border-white/[0.14] text-surface-50 text-base font-semibold;
+    @apply transition-all duration-300 ease-spring;
+    @apply hover:bg-white/[0.14] hover:border-white/[0.22] active:scale-[0.97];
+    @apply disabled:opacity-40 disabled:cursor-not-allowed;
+  }
+
+  .btn-ghost {
+    @apply inline-flex items-center gap-2 rounded-full px-5 py-2.5;
+    @apply text-surface-200 text-sm font-semibold;
+    @apply transition-all duration-300 ease-spring;
+    @apply hover:bg-white/[0.08] hover:text-white active:scale-[0.97];
+  }
+
+  .btn-danger {
+    @apply inline-flex items-center gap-2 rounded-full px-5 py-2.5;
+    @apply text-red-400 text-sm font-semibold;
+    @apply transition-all duration-300 ease-spring;
+    @apply hover:bg-red-500/15 hover:text-red-300 active:scale-[0.97];
+  }
+
+  /* Form elements */
+  .input {
+    @apply w-full bg-white/[0.05] border border-white/[0.1] rounded-2xl px-4 py-3.5;
+    @apply text-surface-50 placeholder-surface-400 text-base font-normal;
+    @apply focus:outline-none focus:border-primary-500/80 focus:bg-white/[0.08] focus:ring-2 focus:ring-primary-500/20;
+    @apply transition-all duration-300 ease-smooth;
+  }
+
+  .label {
+    @apply block text-sm font-semibold text-surface-200 mb-2 uppercase tracking-wider;
+  }
+
+  /* Eyebrow badge */
+  .eyebrow {
+    @apply inline-flex items-center rounded-full px-3.5 py-1.5;
+    @apply bg-primary-500/15 border border-primary-500/30;
+    @apply text-xs uppercase tracking-[0.2em] font-semibold text-primary-300;
+  }
+
+  /* Waveform bars animation */
+  .waveform-bar {
+    @apply w-1 bg-primary-500 rounded-full origin-bottom;
+    animation: waveform 1s ease-in-out infinite;
+  }
+}
+
+/* ── Utility overrides ───────────────────────────────────────────────────── */
+@layer utilities {
+  .ease-spring { transition-timing-function: cubic-bezier(0.32, 0.72, 0, 1); }
+  .ease-smooth { transition-timing-function: cubic-bezier(0.4, 0, 0.2, 1); }
+
+  /* Stagger animation delays */
+  .delay-100 { animation-delay: 100ms; }
+  .delay-150 { animation-delay: 150ms; }
+  .delay-200 { animation-delay: 200ms; }
+  .delay-300 { animation-delay: 300ms; }
+  .delay-400 { animation-delay: 400ms; }
+  .delay-500 { animation-delay: 500ms; }
+}

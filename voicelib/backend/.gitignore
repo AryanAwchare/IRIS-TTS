@@ -1,0 +1,19 @@
+# Environment & Secrets
+.env
+.env.*
+*.env
+.env.local
+!.env.example
+.ngrok*
+
+# Python & Dependencies
+__pycache__/
+*.py[cod]
+venv/
+.venv/
+
+# Audio Data & Logs
+local_storage_data/
+logs/
+*.wav
+*.mp3
