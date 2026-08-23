@@ -12,9 +12,12 @@
 *.token
 .ngrok*
 
-# Node / Frontend Dependencies
-node_modules/
-dist/
+# Agent & IDE internal folders
+.agents/
+agents/
+.system_generated/
+.gemini/
+
 
 
 # Python & Cache
