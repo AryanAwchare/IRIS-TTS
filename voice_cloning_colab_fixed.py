@@ -60,8 +60,26 @@ except ImportError:
 if os.name == "posix":
     os.system("fuser -k 8008/tcp 2>/dev/null")
 
-# ── 1.1 PYTORCH COMPATIBILITY SHIMS ────────────────────────────────────────
+# ── 1.1 PYTORCH & TORCHVISION COMPATIBILITY SHIMS ───────────────────────────
 if torch is not None:
+    # Fix Colab torchvision::nms mismatch causing transformers/LlamaModel import crash
+    try:
+        import torchvision
+    except Exception:
+        pass
+
+    try:
+        import torchvision.ops
+    except Exception:
+        # If torchvision C++ ops are broken/missing, mock them out so transformers loads safely
+        if "torchvision" in sys.modules:
+            tv = sys.modules["torchvision"]
+            if not hasattr(tv, "ops"):
+                ops_mock = types.ModuleType("torchvision.ops")
+                ops_mock.nms = lambda *a, **kw: None
+                tv.ops = ops_mock
+                sys.modules["torchvision.ops"] = ops_mock
+
     if not hasattr(torch._utils, "_chunk_or_narrow_cat"):
         def _chunk_or_narrow_cat(tensors, dim=0):
             return torch.cat(tensors, dim=dim)
