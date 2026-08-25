@@ -192,30 +192,10 @@ class GPTSoVITSEngine(BaseTTSEngine):
         for pattern, replacement in TAG_MAP.items():
             cleaned_text = re.sub(pattern, replacement, cleaned_text, flags=re.IGNORECASE)
 
-        # 2. Determine emotional and pitch calibration modifiers
+        # Speed, pitch, cfg_weight, and exaggeration are already resolved by emotion_analyzer.py
+        # Chatterbox handles pitch naturally from the reference audio.
         active_speed = speed
         active_pitch = pitch
-
-        # NOTE: Do NOT auto-apply pitch_bias from voice profiler.
-        # Chatterbox TTS handles speaker pitch internally via the reference audio prompt.
-        # Applying pitch_shift post-generation destroys the natural frequency structure.
-
-        
-        if emotions and any(v > 0 for v in emotions.values()):
-            happy_w = emotions.get("happiness", 0.0)
-            sad_w = emotions.get("sadness", 0.0)
-            anger_w = emotions.get("anger", 0.0)
-            fear_w = emotions.get("fear", 0.0)
-            surprise_w = emotions.get("surprise", 0.0)
-            
-            pitch_mod = (happy_w * 1.8) - (sad_w * 1.5) + (anger_w * 1.2) + (fear_w * 2.0) + (surprise_w * 3.0)
-            speed_mod = 1.0 + (happy_w * 0.1) - (sad_w * 0.15) + (anger_w * 0.2) + (fear_w * 0.15)
-            active_pitch += pitch_mod
-            active_speed *= speed_mod
-        elif emotion in EMOTION_PRESETS:
-            preset = EMOTION_PRESETS[emotion]
-            active_pitch += preset["pitch"]
-            active_speed *= preset["speed"]
 
         logger.info(
             f"GPT-SoVITS Synthesis: text_len={len(cleaned_text)}, emotion='{emotion}', "

@@ -154,6 +154,7 @@ export default function Generate() {
 
   // Studio Control Tabs: 'text' | 'emotions' | 'hyperparams'
   const [activeTab, setActiveTab]               = useState('text')
+  const [selectedEmotion, setSelectedEmotion]   = useState('auto')
 
   // GPT-SoVITS / XTTS Hyperparameters
   const [rank, setRank]                         = useState(128)
@@ -183,45 +184,63 @@ export default function Generate() {
     // Poll Colab GPU status
     const checkColab = () => {
       generateApi.getColabStatus()
-        .then(setColabStatus)
+        .then((s) => setColabStatus(s))
         .catch(() => setColabStatus({ online: false }))
     }
     checkColab()
-    const interval = setInterval(checkColab, 8000)
+    const interval = setInterval(checkColab, 15000)
     return () => clearInterval(interval)
-  }, [])
+  }, [fetchVoices])
 
+  // Sync selected voice from URL query params
   useEffect(() => {
-    if (params.get('voice_id')) setSelectedVoiceId(params.get('voice_id'))
+    const vId = params.get('voice_id')
+    if (vId) setSelectedVoiceId(vId)
   }, [params])
 
-  // Auto-sync calibrated acoustic settings when selected voice changes
+  // Auto-select first voice once loaded
   useEffect(() => {
-    const v = voices.find((x) => x.id === selectedVoiceId)
-    if (v?.opt_weights) {
-      const w = v.opt_weights
-      if (w.speed_scale !== undefined) setSpeed(w.speed_scale)
-      if (w.pitch_bias !== undefined) setPitch(w.pitch_bias)
-      if (w.temperature !== undefined) setTemperature(w.temperature)
-      if (w.top_p !== undefined) setTopP(w.top_p)
+    if (!selectedVoiceId && voices.length > 0) {
+      setSelectedVoiceId(voices[0].id)
     }
-  }, [selectedVoiceId, voices])
+  }, [voices, selectedVoiceId])
 
-  const refreshHistory = () => {
-    generateApi.history({ limit: 12 }).then(setHistory).catch(() => {})
+  // Fetch generation history
+  const refreshHistory = async () => {
+    try {
+      const hist = await generateApi.history({ limit: 12 })
+      setHistory(hist)
+    } catch (err) {
+      console.error('Failed to load history:', err)
+    }
   }
 
   useEffect(() => {
     refreshHistory()
-  }, [latestResult])
+  }, [])
 
   const selectedVoice = voices.find((v) => v.id === selectedVoiceId)
-  const activeVoice = voices.find((v) => v.id === activeResult?.voice_id) || selectedVoice
   const simVoice = voices.find((v) => v.id === similarityGen?.voice_id) || selectedVoice
   const canGenerate = selectedVoiceId && text.trim().length > 0 && !loading
 
+  const handleEmotionSelect = (emoId) => {
+    setSelectedEmotion(emoId)
+    // Synchronize 8D emotion vector for Zonos engine
+    if (emoId === 'happy') setEmotions({ happiness: 0.8, sadness: 0, disgust: 0, fear: 0, surprise: 0.1, anger: 0, neutral: 0.1, other: 0 })
+    else if (emoId === 'excited') setEmotions({ happiness: 0.5, sadness: 0, disgust: 0, fear: 0, surprise: 0.5, anger: 0, neutral: 0, other: 0 })
+    else if (emoId === 'sad') setEmotions({ happiness: 0, sadness: 0.8, disgust: 0, fear: 0.1, surprise: 0, anger: 0, neutral: 0.1, other: 0 })
+    else if (emoId === 'angry') setEmotions({ happiness: 0, sadness: 0, disgust: 0.2, fear: 0, surprise: 0, anger: 0.8, neutral: 0, other: 0 })
+    else if (emoId === 'calm') setEmotions({ happiness: 0.1, sadness: 0, disgust: 0, fear: 0, surprise: 0, anger: 0, neutral: 0.9, other: 0 })
+    else if (emoId === 'neutral') setEmotions({ happiness: 0.1, sadness: 0, disgust: 0, fear: 0, surprise: 0, anger: 0, neutral: 0.9, other: 0 })
+  }
+
   const insertTag = (tag) => {
     setText((prev) => prev ? `${prev} ${tag} ` : `${tag} `)
+    // Auto-select corresponding emotion mode for convenience
+    if (tag === '[laughter]' || tag === '[chuckle]') handleEmotionSelect('happy')
+    else if (tag === '[sigh]') handleEmotionSelect('sad')
+    else if (tag === '[gasp]') handleEmotionSelect('excited')
+    else if (tag === '[whisper]') handleEmotionSelect('calm')
   }
 
   const handleEnhancePrompt = () => {
@@ -243,20 +262,6 @@ export default function Generate() {
     setText(s)
   }
 
-  const handleEmotionChange = (key, val) => {
-    setEmotions((prev) => ({ ...prev, [key]: parseFloat(val) }))
-  }
-
-  const normalizeEmotions = () => {
-    const total = Object.values(emotions).reduce((a, b) => a + b, 0)
-    if (total === 0) return
-    const normalized = {}
-    Object.keys(emotions).forEach((k) => {
-      normalized[k] = parseFloat((emotions[k] / total).toFixed(2))
-    })
-    setEmotions(normalized)
-  }
-
   const handleGenerate = async () => {
     if (!canGenerate) return
     setError(null)
@@ -264,6 +269,7 @@ export default function Generate() {
     try {
       const gen = await generateApi.generate(selectedVoiceId, text, {
         engine,
+        emotion: selectedEmotion,
         rank,
         top_p: topP,
         temperature,
@@ -440,9 +446,46 @@ export default function Generate() {
               {/* TAB 1: Script & Paralinguistics */}
               {activeTab === 'text' && (
                 <div className="space-y-5 animate-fade-in">
+                  {/* Emotion Mode Preset Selector */}
                   <div>
                     <div className="flex items-center justify-between mb-2">
-                      <label className="label mb-0">Paralinguistic Expressiveness Tags</label>
+                      <label className="label mb-0">Emotion & Delivery Mode</label>
+                      <span className="text-xs font-semibold text-primary-300 font-mono">
+                        Active: {selectedEmotion.toUpperCase()}
+                      </span>
+                    </div>
+                    <div className="flex flex-wrap gap-2">
+                      {[
+                        { id: 'auto', label: '⚡ Auto (NLP Sentiment)', color: 'bg-emerald-500/20 text-emerald-300 border-emerald-500/40' },
+                        { id: 'happy', label: '😊 Happy', color: 'bg-amber-500/20 text-amber-300 border-amber-500/40' },
+                        { id: 'excited', label: '🤩 Excited', color: 'bg-purple-500/20 text-purple-300 border-purple-500/40' },
+                        { id: 'calm', label: '😌 Calm', color: 'bg-cyan-500/20 text-cyan-300 border-cyan-500/40' },
+                        { id: 'sad', label: '😢 Sad', color: 'bg-blue-500/20 text-blue-300 border-blue-500/40' },
+                        { id: 'angry', label: '😠 Angry', color: 'bg-rose-500/20 text-rose-300 border-rose-500/40' },
+                        { id: 'neutral', label: '😐 Neutral', color: 'bg-zinc-800 text-zinc-300 border-zinc-700' },
+                      ].map((emo) => {
+                        const isCurrent = selectedEmotion === emo.id
+                        return (
+                          <button
+                            key={emo.id}
+                            type="button"
+                            onClick={() => handleEmotionSelect(emo.id)}
+                            className={`text-xs sm:text-sm px-3.5 py-1.5 rounded-xl border font-semibold transition-all ${
+                              isCurrent
+                                ? `${emo.color} ring-2 ring-primary-400 shadow-glow-sm scale-[1.03]`
+                                : 'bg-white/[0.04] border-white/[0.1] text-surface-200 hover:bg-white/[0.08] hover:text-white'
+                            }`}
+                          >
+                            {emo.label}
+                          </button>
+                        )
+                      })}
+                    </div>
+                  </div>
+
+                  <div>
+                    <div className="flex items-center justify-between mb-2">
+                      <label className="label mb-0">Expressiveness Tags (Click to Insert & Set Emotion)</label>
                       <span className="text-xs font-medium text-surface-300">Click to insert tag</span>
                     </div>
                     <div className="flex flex-wrap gap-2.5">

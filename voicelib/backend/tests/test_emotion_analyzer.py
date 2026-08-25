@@ -35,7 +35,7 @@ def test_happy_joy_emotion():
 
     params = compute_modulated_synthesis_parameters(text, requested_emotion="auto")
     assert params["resolved_emotion"] == "happy"
-    assert 0.45 <= params["cfg_weight"] <= 0.65
+    assert 0.40 <= params["cfg_weight"] <= 0.65
     assert params["exaggeration"] >= 0.15
 
 

@@ -172,9 +172,9 @@ def clean_and_denoise_audio(audio_path_or_bytes: Union[bytes, str], target_sr: i
         y = librosa.resample(y, orig_sr=sr, target_sr=target_sr)
         sr = target_sr
 
-    # 2. High-pass filter (remove 0-65Hz mic rumble / DC offset)
+    # 2. Gentle High-pass filter (remove sub-audible <50Hz DC rumble while preserving chest body)
     nyq = sr * 0.5
-    b, a = signal.butter(4, 65.0 / nyq, btype='highpass')
+    b, a = signal.butter(2, 50.0 / nyq, btype='highpass')
     y = signal.filtfilt(b, a, y).astype(np.float32)
 
     # 3. Silence Trimming (-40dB)
@@ -247,29 +247,24 @@ def _shelf_filter(audio: np.ndarray, sr: int, cutoff: float, gain_db: float) -> 
 
 def enhance_voice_mastering(audio_np: np.ndarray, sr: int = 32000) -> np.ndarray:
     """
-    Studio Anti-Harshness Vocal Mastering:
-    - 65Hz High-pass rumble filter
-    - Smooth Noise Gate (-44 dBFS) for dead silence during speech pauses
-    - Chest Warmth (+1.8dB @ 240Hz) for full, natural body
-    - De-Harsher (-3.0dB @ 3.4kHz) removing piercing digital AI glare
-    - De-Esser (-2.5dB @ 7.2kHz) softening harsh sibilant 's', 'sh' sounds
-    - Ultrasonic filter (13.5kHz) eliminating vocoder hiss
-    - Tube saturation rounding off sharp transients
-    - True-Peak Limiter (-0.5 dBFS)
+    Transparent, Natural, Soft Voice Mastering:
+    - 45Hz gentle high-pass filter (DC rumble removal)
+    - Smooth Noise Gate (-46 dBFS) for clean speech pauses
+    - Transparent Peak Limiter (-0.5 dBFS) without artificial saturation
     """
     audio = audio_np.copy().astype(np.float32)
     nyq = sr * 0.5
 
-    # 1. Clean sub-bass rumble (<65Hz)
-    if (65.0 / nyq) < 1.0 and len(audio) > 15:
-        b_hp, a_hp = signal.butter(3, 65.0 / nyq, btype='highpass')
+    # 1. Sub-bass rumble removal (<45Hz, order 2)
+    if (45.0 / nyq) < 1.0 and len(audio) > 15:
+        b_hp, a_hp = signal.butter(2, 45.0 / nyq, btype='highpass')
         audio = signal.filtfilt(b_hp, a_hp, audio).astype(np.float32)
 
     # 2. Smooth Noise Gate to eliminate pause hiss
-    threshold = 10 ** (-44.0 / 20.0)
-    frame = max(1, int(sr * 0.008))
-    atk_samples = max(1, int(sr * 0.010))
-    rel_samples = max(1, int(sr * 0.090))
+    threshold = 10 ** (-46.0 / 20.0)
+    frame = max(1, int(sr * 0.010))
+    atk_samples = max(1, int(sr * 0.015))
+    rel_samples = max(1, int(sr * 0.100))
     gain = 1.0
     for i in range(0, len(audio), frame):
         chunk = audio[i : i + frame]
@@ -281,25 +276,7 @@ def enhance_voice_mastering(audio_np: np.ndarray, sr: int = 32000) -> np.ndarray
             gain = max(0.05, gain - frame / rel_samples)
         audio[i : i + frame] = chunk * gain
 
-    # 3. Chest Warmth (+1.8dB @ 240Hz)
-    audio = _peaking_filter(audio, sr, center_freq=240.0, gain_db=1.8, q=0.9)
-
-    # 4. Anti-Harshness (-3.0dB @ 3.4kHz) — Removes sharp digital edge
-    audio = _peaking_filter(audio, sr, center_freq=3400.0, gain_db=-3.0, q=1.3)
-
-    # 5. De-Esser (-2.5dB @ 7.2kHz) — Softens piercing consonants
-    audio = _shelf_filter(audio, sr, cutoff=7200.0, gain_db=-2.5)
-
-    # 6. Ultrasonic Lowpass (13.5kHz) — Removes high-end vocoder hiss
-    if (13500.0 / nyq) < 0.95 and len(audio) > 15:
-        b_lp, a_lp = signal.butter(2, 13500.0 / nyq, btype='lowpass')
-        audio = signal.filtfilt(b_lp, a_lp, audio).astype(np.float32)
-
-    # 7. Analog Tube Saturation (rounds sharp peaks, adds harmonic warmth)
-    even = (audio ** 2) - np.mean(audio ** 2)
-    audio = np.tanh((audio + 0.035 * even) * 1.02).astype(np.float32)
-
-    # 8. True-Peak Limiter (-0.5 dBFS)
+    # 3. Transparent Peak Limiter (-0.5 dBFS ceiling, no hard distortion)
     max_val = float(np.max(np.abs(audio))) + 1e-9
     target_peak = 10 ** (-0.5 / 20.0)
     if max_val > target_peak:
@@ -595,7 +572,7 @@ if colab_app is not None:
                     f_ref_out.write(clean_wav_bytes)
 
                 try:
-                    ref_path = select_best_segment(ref_path, target_duration=8.0)
+                    ref_path = select_best_segment(ref_path, target_duration=10.0)
                 except Exception as vad_err:
                     print(f"⚠️ VAD selection notice: {vad_err}")
 
