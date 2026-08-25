@@ -62,6 +62,14 @@ try:
             alias="ALLOWED_AUDIO_FORMATS",
         )
 
+        # Emotion Intelligence
+        emotion_detection_enabled: bool = Field(default=True, alias="EMOTION_DETECTION_ENABLED")
+        emotion_blend_mode: str = Field(default="auto", alias="EMOTION_BLEND_MODE")
+        emotion_model_name: str = Field(
+            default="j-hartmann/emotion-english-distilroberta-base",
+            alias="EMOTION_MODEL_NAME"
+        )
+
         # Frontend
         vite_api_base_url: str = Field(default="http://localhost:8000", alias="VITE_API_BASE_URL")
 

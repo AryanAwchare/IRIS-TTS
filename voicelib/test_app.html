@@ -160,7 +160,7 @@
             <input id="voiceName" type="text" value="Alice Sample" class="input-field" />
           </div>
           <div>
-            <label class="block text-xs font-medium text-zinc-400 mb-1">Audio Sample (6s – 120s clean speech)</label>
+            <label class="block text-xs font-medium text-zinc-400 mb-1">Audio Sample (3s – 300s / 5 mins clean speech)</label>
             <input id="voiceFile" type="file" accept=".mp3,.wav,.m4a,.aac,.ogg,.flac,.webm,.mp4,audio/*,audio/mpeg,audio/mp3" class="input-field text-xs file:mr-4 file:py-1 file:px-3 file:rounded-full file:border-0 file:text-xs file:font-semibold file:bg-blue-500/20 file:text-blue-400 hover:file:bg-blue-500/30 cursor-pointer" />
           </div>
           <div class="flex items-center gap-2 pt-1">
@@ -213,7 +213,8 @@
           <div>
             <label class="block text-xs font-medium text-zinc-400 mb-1">Emotion Preset</label>
             <div class="flex flex-wrap gap-1.5">
-              <button type="button" onclick="setEmotion('neutral')" class="emo-btn text-xs px-2.5 py-1 rounded-lg bg-blue-500 text-white font-medium">Neutral</button>
+              <button type="button" onclick="setEmotion('auto')" class="emo-btn text-xs px-2.5 py-1 rounded-lg bg-emerald-600 text-white font-medium">⚡ Auto (NLP Sentiment)</button>
+              <button type="button" onclick="setEmotion('neutral')" class="emo-btn text-xs px-2.5 py-1 rounded-lg bg-zinc-800 text-zinc-300 hover:bg-zinc-700">Neutral</button>
               <button type="button" onclick="setEmotion('happy')" class="emo-btn text-xs px-2.5 py-1 rounded-lg bg-zinc-800 text-zinc-300 hover:bg-zinc-700">😊 Happy</button>
               <button type="button" onclick="setEmotion('sad')" class="emo-btn text-xs px-2.5 py-1 rounded-lg bg-zinc-800 text-zinc-300 hover:bg-zinc-700">😢 Sad</button>
               <button type="button" onclick="setEmotion('angry')" class="emo-btn text-xs px-2.5 py-1 rounded-lg bg-zinc-800 text-zinc-300 hover:bg-zinc-700">😠 Angry</button>
@@ -262,7 +263,10 @@
 
         <!-- Audio Output Player -->
         <div id="audioOutputContainer" class="hidden p-4 rounded-xl bg-zinc-900 border border-zinc-800 space-y-2">
-          <p class="text-xs font-semibold text-emerald-400">✓ Audio Generated Successfully!</p>
+          <div class="flex items-center justify-between">
+            <p class="text-xs font-semibold text-emerald-400">✓ Audio Generated Successfully!</p>
+            <div id="simScoreBadge" class="hidden text-[11px] font-mono font-semibold px-2 py-0.5 rounded bg-emerald-500/20 text-emerald-300 border border-emerald-500/30"></div>
+          </div>
           <audio id="audioPlayer" controls class="w-full h-10 mt-1"></audio>
           <a id="downloadLink" download="generated.wav" href="#" class="text-xs text-blue-400 hover:underline block pt-1">Download WAV File ↗</a>
         </div>
@@ -458,18 +462,39 @@
         container.innerHTML = '<p class="text-xs text-zinc-500 italic">No voices found in your library.</p>';
         return;
       }
-      container.innerHTML = availableVoices.map(v => `
-        <div class="flex items-center justify-between p-2.5 rounded-lg bg-zinc-900 border border-zinc-800">
-          <div>
-            <p class="text-xs font-semibold text-white">${v.name}</p>
-            <p class="text-[10px] text-zinc-500 font-mono">${v.id}</p>
+      container.innerHTML = availableVoices.map(v => {
+        const opt = v.opt_weights || {};
+        const f0 = opt.median_f0_hz ? `${opt.median_f0_hz}Hz` : 'N/A';
+        const reg = opt.pitch_register || 'Standard';
+        const hnr = opt.hnr_db ? `${opt.hnr_db}dB HNR` : '';
+        const formants = opt.formants_hz ? `F1-F4: [${opt.formants_hz.map(x => Math.round(x)).join(', ')}]` : '';
+        const cfg = opt.cfg_weight ? `CFG: ${opt.cfg_weight}` : 'CFG: 0.60';
+        const exag = opt.exaggeration !== undefined ? `Exag: ${opt.exaggeration}` : 'Exag: 0.05';
+
+        return `
+        <div class="p-3 rounded-lg bg-zinc-900 border border-zinc-800 space-y-1.5 hover:border-zinc-700 transition">
+          <div class="flex items-center justify-between">
+            <div class="flex items-center gap-2">
+              <span class="w-2.5 h-2.5 rounded-full bg-emerald-400"></span>
+              <p class="text-xs font-semibold text-white">${v.name}</p>
+              <span class="text-[10px] px-1.5 py-0.5 rounded bg-blue-500/20 text-blue-300 font-mono">${reg}</span>
+            </div>
+            <div class="flex gap-2">
+              <button onclick="selectVoice('${v.id}')" class="text-xs px-2 py-0.5 rounded bg-blue-600 hover:bg-blue-500 text-white font-medium">Use</button>
+              <button onclick="deleteVoice('${v.id}')" class="btn-danger text-xs">Delete</button>
+            </div>
           </div>
-          <div class="flex gap-2">
-            <button onclick="selectVoice('${v.id}')" class="text-xs text-blue-400 hover:underline">Use</button>
-            <button onclick="deleteVoice('${v.id}')" class="btn-danger">Delete</button>
+          <p class="text-[10px] text-zinc-500 font-mono">ID: ${v.id}</p>
+          <div class="flex flex-wrap gap-1 text-[10px] text-zinc-400 pt-0.5">
+            <span class="px-1.5 py-0.5 rounded bg-zinc-800 border border-zinc-700/50">🎵 F0: ${f0}</span>
+            ${hnr ? `<span class="px-1.5 py-0.5 rounded bg-zinc-800 border border-zinc-700/50">⚡ ${hnr}</span>` : ''}
+            <span class="px-1.5 py-0.5 rounded bg-zinc-800 border border-zinc-700/50">🎯 ${cfg}</span>
+            <span class="px-1.5 py-0.5 rounded bg-zinc-800 border border-zinc-700/50">🎭 ${exag}</span>
           </div>
+          ${formants ? `<p class="text-[9px] text-zinc-500 font-mono pt-0.5">🔬 Formants: ${formants}</p>` : ''}
         </div>
-      `).join('');
+        `;
+      }).join('');
     }
 
     function selectVoice(id) {
@@ -536,6 +561,25 @@
         download.href = data.audio_url;
         document.getElementById('audioOutputContainer').classList.remove('hidden');
         player.play();
+
+        // Fetch similarity analysis
+        if (data.id) {
+          fetch(`${getHost()}/generations/${data.id}/similarity`, {
+            headers: { 'Authorization': `Bearer ${currentToken}` }
+          })
+          .then(r => r.json())
+          .then(sim => {
+            log('GET /generations/{id}/similarity', sim);
+            if (sim.overall_score !== undefined) {
+              const simEl = document.getElementById('simScoreBadge');
+              if (simEl) {
+                simEl.textContent = `🎯 Speaker Similarity: ${sim.overall_score}% (${sim.accuracy_grade || 'High'})`;
+                simEl.classList.remove('hidden');
+              }
+            }
+          })
+          .catch(() => {});
+        }
       } catch (err) {
         showStatus(err.message, true);
       }

@@ -180,7 +180,7 @@ class GPTSoVITSEngine(BaseTTSEngine):
         temperature: float = 0.7,
         text_lang: str = "en",
         exaggeration: float = 0.0,
-        cfg_weight: float = 0.35,
+        cfg_weight: float = 0.55,
         **kwargs: Any,
     ) -> bytes:
         """
@@ -196,14 +196,9 @@ class GPTSoVITSEngine(BaseTTSEngine):
         active_speed = speed
         active_pitch = pitch
 
-        # Apply reference voice auto pitch bias if explicit pitch request is zero
-        state_pitch_bias = 0.0
-        if isinstance(voice_state, dict):
-            state_pitch_bias = float(voice_state.get("pitch_bias", 0.0))
-
-        if abs(active_pitch) < 0.05 and abs(state_pitch_bias) > 0.05:
-            active_pitch += state_pitch_bias
-            logger.info(f"Auto-calibrated reference voice pitch bias applied: {state_pitch_bias:+.2f} semitones")
+        # NOTE: Do NOT auto-apply pitch_bias from voice profiler.
+        # Chatterbox TTS handles speaker pitch internally via the reference audio prompt.
+        # Applying pitch_shift post-generation destroys the natural frequency structure.
 
         
         if emotions and any(v > 0 for v in emotions.values()):
@@ -234,21 +229,11 @@ class GPTSoVITSEngine(BaseTTSEngine):
         if ref_bytes and len(ref_bytes) > 0:
             try:
                 import requests
-                from app.utils.audio_preprocess import preprocess_voice_sample
 
-                # Preprocess to clean 32kHz mono WAV before sending to Colab
-                try:
-                    clean_ref_bytes = preprocess_voice_sample(
-                        ref_bytes,
-                        target_sr=32000,
-                        trim_silence=True,
-                        denoise=True,
-                        normalize=True,
-                    )
-                    logger.info("Reference audio preprocessed to clean 32kHz WAV for Colab.")
-                except Exception as pre_err:
-                    logger.warning(f"Audio preprocessing skipped: {pre_err}")
-                    clean_ref_bytes = ref_bytes
+                # Send raw cached audio to Colab — Colab has its own cleaning pipeline.
+                # Double-preprocessing strips vital speaker harmonics and formant detail.
+                clean_ref_bytes = ref_bytes
+                logger.info("Sending raw reference audio to Colab (Colab handles cleaning).")
 
                 settings = get_settings()
                 colab_url = (settings.colab_gpu_api_url or os.getenv("COLAB_GPU_API_URL", self._colab_api_url)).rstrip("/")
@@ -258,6 +243,10 @@ class GPTSoVITSEngine(BaseTTSEngine):
                 res = None
                 for attempt in range(1, max_retries + 1):
                     try:
+                        # Only send pitch if user explicitly set a non-zero value
+                        # Chatterbox handles speaker pitch from the reference audio
+                        explicit_pitch = pitch if abs(pitch) > 0.05 else 0.0
+
                         res = requests.post(
                             f"{colab_url}/synthesize",
                             files={"ref_audio": ("sample.wav", clean_ref_bytes, "audio/wav")},
@@ -265,7 +254,7 @@ class GPTSoVITSEngine(BaseTTSEngine):
                                 "text": cleaned_text,
                                 "emotion": emotion,
                                 "speed": str(active_speed),
-                                "pitch": str(active_pitch),
+                                "pitch": str(explicit_pitch),
                                 "cfg_weight": str(cfg_weight),
                                 "exaggeration": str(exaggeration),
                                 "language": text_lang,

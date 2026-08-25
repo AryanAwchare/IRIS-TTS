@@ -126,10 +126,11 @@ async def list_voices(
     )
     voices = result.scalars().all()
 
-    # Auto-backfill unique opt_weights profile for existing voices if missing or missing detailed pitch
+    # Auto-backfill deep acoustic DNA profile (v2) for existing voices if missing or older version
     dirty = False
     for v in voices:
-        if not v.opt_weights or "median_f0_hz" not in v.opt_weights:
+        opt = v.opt_weights if isinstance(v.opt_weights, dict) else {}
+        if not opt or opt.get("profile_version", 1) < 2 or "formants_hz" not in opt:
             try:
                 raw_b = storage.download_bytes(v.sample_s3_key)
                 from app.utils.voice_profiler import extract_voice_acoustic_profile
@@ -140,8 +141,9 @@ async def list_voices(
                     v.opt_weights = profile
                 db.add(v)
                 dirty = True
+                logger.info(f"✨ Voice '{v.name}' ({v.id}) upgraded to Deep Acoustic DNA Profile v2!")
             except Exception as e:
-                logger.warning(f"Opt_weights pitch backfill skipped for {v.name}: {e}")
+                logger.warning(f"Opt_weights v2 backfill skipped for {v.name}: {e}")
     if dirty:
         await db.commit()
 

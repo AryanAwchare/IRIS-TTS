@@ -11,7 +11,7 @@ import tempfile
 import os
 from typing import Annotated
 
-from fastapi import APIRouter, Depends, HTTPException, Query, status
+from fastapi import APIRouter, Depends, HTTPException, Query, Response, status
 from sqlalchemy import select
 from sqlalchemy.ext.asyncio import AsyncSession
 
@@ -34,6 +34,7 @@ async def generate_speech(
     payload: GenerateRequest,
     current_user: Annotated[User, Depends(get_current_user)],
     db: Annotated[AsyncSession, Depends(get_db)],
+    response: Response,
 ) -> GenerationOut:
     # ── 1. Fetch voice + ownership check ───────────────────────────────────
     result = await db.execute(select(Voice).where(Voice.id == payload.voice_id))
@@ -64,7 +65,7 @@ async def generate_speech(
             if os.path.exists(tmp_path):
                 os.unlink(tmp_path)
 
-    # ── 3. Merge per-voice unique acoustic profile parameters ────────────────
+    # ── 3. Merge per-voice unique acoustic profile + emotion intelligence ───
     import asyncio
     import json
     from functools import partial
@@ -78,18 +79,41 @@ async def generate_speech(
         except Exception:
             opt = {}
 
-    active_speed = payload.speed if (payload.speed and abs(payload.speed - 1.0) > 0.05) else opt.get("speed_scale", 1.0)
-    active_pitch = payload.pitch if (payload.pitch and abs(payload.pitch) > 0.05) else float(opt.get("pitch_bias", 0.0))
-    active_top_p = payload.top_p if (payload.top_p and abs(payload.top_p - 0.8) > 0.05) else opt.get("top_p", 0.8)
-    active_temp = payload.temperature if (payload.temperature and abs(payload.temperature - 0.7) > 0.05) else opt.get("temperature", 0.7)
-    active_exaggeration = float(opt.get("exaggeration", 0.00))
-    active_cfg = float(opt.get("cfg_weight", 0.35))
+    from app.config import get_settings
+    from app.utils.emotion_analyzer import compute_modulated_synthesis_parameters
+    settings = get_settings()
+    blend_mode = getattr(settings, "emotion_blend_mode", "auto")
 
-    logger.info(
-        f"Generate speech for voice '{voice.name}' ({voice.id}): active_pitch={active_pitch:+.2f} semitones "
-        f"(opt pitch_bias={opt.get('pitch_bias', 0.0)}, median_f0={opt.get('median_f0_hz', 'N/A')}Hz, register='{opt.get('pitch_register', 'N/A')}')"
+    resolved_params = compute_modulated_synthesis_parameters(
+        text=payload.text,
+        requested_emotion=payload.emotion,
+        opt_weights=opt,
+        user_speed=payload.speed,
+        user_pitch=payload.pitch,
+        blend_mode=blend_mode,
     )
 
+    active_emotion = resolved_params["resolved_emotion"]
+    active_speed = resolved_params["speed"]
+    active_pitch = resolved_params["pitch"]
+    active_cfg = resolved_params["cfg_weight"]
+    active_exaggeration = resolved_params["exaggeration"]
+    active_top_p = resolved_params["top_p"]
+    active_temp = resolved_params["temperature"]
+    analysis_meta = resolved_params.get("analysis", {})
+
+    # Expose transparent metadata headers
+    response.headers["X-Detected-Emotion"] = str(analysis_meta.get("detected_emotion", "neutral"))
+    response.headers["X-Emotion-Intensity"] = str(resolved_params.get("intensity", 0.0))
+    response.headers["X-Resolved-CFG"] = str(active_cfg)
+    response.headers["X-Resolved-Exaggeration"] = str(active_exaggeration)
+
+    logger.info(
+        f"🎙️ Generating speech for voice '{voice.name}' ({voice.id}): "
+        f"emotion='{active_emotion}' (detected='{analysis_meta.get('detected_emotion')}', intensity={resolved_params.get('intensity')}), "
+        f"cfg={active_cfg:.2f}, exag={active_exaggeration:.2f}, speed={active_speed:.2f}, pitch={active_pitch:+.2f}st, "
+        f"median_f0={opt.get('median_f0_hz', 'N/A')}Hz, register='{opt.get('pitch_register', 'N/A')}'"
+    )
 
     try:
         loop = asyncio.get_running_loop()
@@ -98,7 +122,7 @@ async def generate_speech(
             voice_state,
             payload.text,
             engine_id=payload.engine,
-            emotion=payload.emotion or "neutral",
+            emotion=active_emotion,
             emotions=payload.emotions,
             speed=active_speed,
             pitch=active_pitch,
@@ -139,8 +163,8 @@ async def generate_speech(
         input_text=payload.text,
         audio_s3_key=audio_key,
         engine=payload.engine or "gpt-sovits-v3",
-        emotion=payload.emotion or "neutral",
-        speed=payload.speed or 1.0,
+        emotion=active_emotion,
+        speed=active_speed,
     )
     db.add(generation)
     await db.commit()

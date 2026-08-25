@@ -134,10 +134,11 @@ except Exception:
 
 def clean_and_denoise_audio(audio_path_or_bytes: Union[bytes, str], target_sr: int = 32000, enable_demucs: bool = False):
     """
-    Audio cleaner for voice cloning:
-    - Converts to mono 32kHz (optimal for Chatterbox / GPT-SoVITS)
+    Light-touch audio cleaner for reference voice conditioning:
+    - Converts to mono 32kHz (optimal for Chatterbox / neural TTS)
     - Low-frequency rumble cut (<65Hz)
     - Silence trimming and dynamic RMS loudness normalization (-18 dBFS)
+    - Preserves delicate vocal harmonics, air, and speaker timbre without over-filtering
     """
     if isinstance(audio_path_or_bytes, bytes):
         y, sr = sf.read(io.BytesIO(audio_path_or_bytes))
@@ -148,7 +149,7 @@ def clean_and_denoise_audio(audio_path_or_bytes: Union[bytes, str], target_sr: i
     if y.ndim > 1:
         y = y.mean(axis=1)
 
-    # 1. Resample to target sample rate
+    # 1. Resample to target sample rate (32kHz)
     if sr != target_sr:
         y = librosa.resample(y, orig_sr=sr, target_sr=target_sr)
         sr = target_sr
@@ -158,19 +159,12 @@ def clean_and_denoise_audio(audio_path_or_bytes: Union[bytes, str], target_sr: i
     b, a = signal.butter(4, 65.0 / nyq, btype='highpass')
     y = signal.filtfilt(b, a, y).astype(np.float32)
 
-    # 3. Two-pass noise reduction if available
-    if nr is not None:
-        try:
-            y = nr.reduce_noise(y=y, sr=sr, stationary=True, prop_decrease=0.85)
-        except Exception:
-            pass
-
-    # 4. Silence Trimming (-40dB)
+    # 3. Silence Trimming (-40dB)
     yt, _ = librosa.effects.trim(y, top_db=40)
     if len(yt) > sr * 0.5:
         y = yt
 
-    # 5. RMS Loudness Normalization (-18 dBFS target)
+    # 4. RMS Loudness Normalization (-18 dBFS target)
     rms = np.sqrt(np.mean(y**2) + 1e-9)
     target_rms = 0.125  # ~ -18 dBFS
     if rms > 1e-4:
@@ -181,7 +175,7 @@ def clean_and_denoise_audio(audio_path_or_bytes: Union[bytes, str], target_sr: i
     sf.write(out_buf, y, sr, format='WAV', subtype='PCM_16')
     return out_buf.getvalue(), y, sr
 
-print("✅ Audio cleaning & denoising pipeline ready!")
+print("✅ Light-touch audio cleaning pipeline ready (harmonics preserved)!")
 
 # ── 3. VOICE MASTERING POST-PROCESSING ─────────────────────────────────────
 def pitch_preserving_time_stretch(y: np.ndarray, rate: float) -> np.ndarray:
@@ -407,19 +401,23 @@ def calculate_prosody_variance(audio: np.ndarray, sr: int = 32000) -> Optional[f
         print(f"⚠️ Prosody variance notice: {exc}")
         return None
 
-def select_best_segment(audio_path: str, target_duration: float = 8.0) -> str:
-    """Pre-filters reference audio using energy windowing."""
+def select_best_segment(audio_path: str, target_duration: float = 10.0) -> str:
+    """
+    Selects the highest quality, most continuous 8-12s speech segment for zero-shot speaker conditioning.
+    Finds the highest energy and lowest noise continuous window.
+    """
     try:
         y, sr = sf.read(audio_path, dtype="float32", always_2d=True)
         y = y.mean(axis=1)
         trimmed, _ = librosa.effects.trim(y, top_db=32)
         if len(trimmed) > sr * 0.5:
             y = trimmed
-        if len(y) > int((target_duration + 3.0) * sr):
+        if len(y) > int((target_duration + 2.0) * sr):
             win_len = int(target_duration * sr)
             best_win = y[:win_len]
             best_pow = -float("inf")
-            for st in range(0, len(y) - win_len, int(0.5 * sr)):
+            step = int(0.25 * sr)
+            for st in range(0, len(y) - win_len, step):
                 cand = y[st : st + win_len]
                 pow_val = float(np.mean(cand ** 2))
                 if pow_val > best_pow:
