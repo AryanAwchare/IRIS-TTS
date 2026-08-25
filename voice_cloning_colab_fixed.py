@@ -140,22 +140,8 @@ def clean_and_denoise_audio(audio_path_or_bytes: Union[bytes, str], target_sr: i
     - Silence trimming and dynamic RMS loudness normalization (-18 dBFS)
     """
     if isinstance(audio_path_or_bytes, bytes):
-        try:
-            y, sr = sf.read(io.BytesIO(audio_path_or_bytes))
-            y = y.astype(np.float32)
-        except Exception:
-            import tempfile
-            with tempfile.NamedTemporaryFile(suffix=".audio", delete=False) as tmp_audio:
-                tmp_audio.write(audio_path_or_bytes)
-                tmp_path = tmp_audio.name
-            try:
-                y, sr = librosa.load(tmp_path, sr=None, mono=True)
-            finally:
-                if os.path.exists(tmp_path):
-                    try:
-                        os.unlink(tmp_path)
-                    except Exception:
-                        pass
+        y, sr = sf.read(io.BytesIO(audio_path_or_bytes))
+        y = y.astype(np.float32)
     else:
         y, sr = librosa.load(audio_path_or_bytes, sr=None, mono=True)
 
@@ -169,9 +155,8 @@ def clean_and_denoise_audio(audio_path_or_bytes: Union[bytes, str], target_sr: i
 
     # 2. High-pass filter (remove 0-65Hz mic rumble / DC offset)
     nyq = sr * 0.5
-    if len(y) > 15 and (65.0 / nyq) < 1.0:
-        b, a = signal.butter(4, 65.0 / nyq, btype='highpass')
-        y = signal.filtfilt(b, a, y).astype(np.float32)
+    b, a = signal.butter(4, 65.0 / nyq, btype='highpass')
+    y = signal.filtfilt(b, a, y).astype(np.float32)
 
     # 3. Two-pass noise reduction if available
     if nr is not None:
@@ -219,14 +204,14 @@ def enhance_voice_mastering(audio_np: np.ndarray, sr: int = 32000) -> np.ndarray
     audio = audio_np.copy().astype(np.float32)
     nyq = sr * 0.5
 
-    if len(audio) > 15 and (30.0 / nyq) < 1.0:
+    if 30.0 / nyq < 1.0:
         b_hp, a_hp = signal.butter(2, 30.0 / nyq, btype='highpass')
         audio = signal.filtfilt(b_hp, a_hp, audio).astype(np.float32)
 
     max_val = float(np.max(np.abs(audio))) + 1e-9
     if max_val > 0.01:
         target_peak = 10 ** (-0.3 / 20.0)  # ~ -0.3 dBFS
-        audio = audio * (target_peak / max_val)
+        audio = audio * (target_peak / max(max_val, 1.0))
         audio = np.clip(audio, -0.99, 0.99)
 
     return audio.astype(np.float32)
@@ -281,7 +266,7 @@ def _get_ecapa_classifier():
     return _ECAPA_CLASSIFIER
 
 def calculate_voice_similarity(ref_audio: Any, gen_audio: Any, sr: int = 32000) -> Optional[float]:
-    """Computes objective speaker similarity using SpeechBrain ECAPA-TDNN (resampled to 16kHz)."""
+    """Computes objective speaker similarity using SpeechBrain ECAPA-TDNN."""
     if torch is None or sf is None:
         return None
     import tempfile
@@ -289,39 +274,31 @@ def calculate_voice_similarity(ref_audio: Any, gen_audio: Any, sr: int = 32000) 
     temp_ref = None
     temp_gen = None
     try:
-        def _to_16k_np(audio_input, input_sr: int) -> np.ndarray:
-            if isinstance(audio_input, str) and os.path.exists(audio_input):
-                arr, orig_sr = sf.read(audio_input, dtype="float32")
-            elif isinstance(audio_input, bytes):
-                try:
-                    arr, orig_sr = sf.read(io.BytesIO(audio_input), dtype="float32")
-                except Exception:
-                    arr, orig_sr = librosa.load(io.BytesIO(audio_input), sr=None, mono=True)
-            elif isinstance(audio_input, np.ndarray):
-                arr = audio_input.astype(np.float32)
-                orig_sr = input_sr
+        if isinstance(ref_audio, str) and os.path.exists(ref_audio):
+            ref_path = ref_audio
+        else:
+            t_ref = tempfile.NamedTemporaryFile(suffix=".wav", delete=False)
+            ref_path = t_ref.name
+            temp_ref = ref_path
+            t_ref.close()
+            if isinstance(ref_audio, bytes):
+                with open(ref_path, "wb") as f_ref_out:
+                    f_ref_out.write(ref_audio)
             else:
-                raise ValueError("Unsupported audio input format for similarity evaluation")
-            if arr.ndim > 1:
-                arr = arr.mean(axis=1)
-            if orig_sr != 16000:
-                arr = librosa.resample(arr, orig_sr=orig_sr, target_sr=16000)
-            return arr
+                sf.write(ref_path, ref_audio, sr, format="WAV", subtype="PCM_16")
 
-        arr_ref = _to_16k_np(ref_audio, sr)
-        arr_gen = _to_16k_np(gen_audio, sr)
-
-        t_ref = tempfile.NamedTemporaryFile(suffix=".wav", delete=False)
-        ref_path = t_ref.name
-        temp_ref = ref_path
-        t_ref.close()
-        sf.write(ref_path, arr_ref, 16000, format="WAV", subtype="PCM_16")
-
-        t_gen = tempfile.NamedTemporaryFile(suffix=".wav", delete=False)
-        gen_path = t_gen.name
-        temp_gen = gen_path
-        t_gen.close()
-        sf.write(gen_path, arr_gen, 16000, format="WAV", subtype="PCM_16")
+        if isinstance(gen_audio, str) and os.path.exists(gen_audio):
+            gen_path = gen_audio
+        else:
+            t_gen = tempfile.NamedTemporaryFile(suffix=".wav", delete=False)
+            gen_path = t_gen.name
+            temp_gen = gen_path
+            t_gen.close()
+            if isinstance(gen_audio, bytes):
+                with open(gen_path, "wb") as f_gen_out:
+                    f_gen_out.write(gen_audio)
+            else:
+                sf.write(gen_path, gen_audio, sr, format="WAV", subtype="PCM_16")
 
         classifier = _get_ecapa_classifier()
         if classifier is None:
@@ -334,13 +311,7 @@ def calculate_voice_similarity(ref_audio: Any, gen_audio: Any, sr: int = 32000) 
             emb_ref = classifier.encode_batch(signal_ref)
             emb_gen = classifier.encode_batch(signal_gen)
 
-        v_ref = emb_ref.squeeze()
-        v_gen = emb_gen.squeeze()
-        if v_ref.ndim == 1:
-            cos_sim = F.cosine_similarity(v_ref, v_gen, dim=0).item()
-        else:
-            cos_sim = F.cosine_similarity(v_ref, v_gen, dim=-1).mean().item()
-
+        cos_sim = F.cosine_similarity(emb_ref.squeeze(), emb_gen.squeeze(), dim=0).item()
         return float(max(0.0, min(1.0, cos_sim)))
     except Exception as exc:
         print(f"❌ ECAPA similarity failed: {exc}")
@@ -522,20 +493,13 @@ if colab_app is not None:
                 raw_bytes = await ref_audio.read()
                 clean_wav_bytes, y_ref, sr_ref = clean_and_denoise_audio(raw_bytes, target_sr=gen_sr)
                 
-                import tempfile
                 import uuid
-
-                raw_ref_path = os.path.join(tempfile.gettempdir(), f"ref_raw_{uuid.uuid4().hex[:8]}.wav")
-                with open(raw_ref_path, "wb") as f_ref_out:
+                ref_path = f"/tmp/ref_{uuid.uuid4().hex[:8]}.wav"
+                with open(ref_path, "wb") as f_ref_out:
                     f_ref_out.write(clean_wav_bytes)
 
-                ref_path = raw_ref_path
-                vad_ref_path = None
                 try:
-                    vad_path = select_best_segment(raw_ref_path, target_duration=8.0)
-                    if vad_path != raw_ref_path:
-                        vad_ref_path = vad_path
-                        ref_path = vad_path
+                    ref_path = select_best_segment(ref_path, target_duration=8.0)
                 except Exception as vad_err:
                     print(f"⚠️ VAD selection notice: {vad_err}")
 
@@ -626,12 +590,11 @@ if colab_app is not None:
 
                 gen_np = enhance_voice_mastering(gen_np, sr=gen_sr)
 
-                for p in (raw_ref_path, vad_ref_path):
-                    if p and os.path.exists(p):
-                        try:
-                            os.unlink(p)
-                        except Exception:
-                            pass
+                try:
+                    if os.path.exists(ref_path):
+                        os.unlink(ref_path)
+                except Exception:
+                    pass
 
                 if torch and torch.cuda.is_available():
                     torch.cuda.empty_cache()
@@ -691,12 +654,11 @@ if colab_app is not None:
 
 def run_server():
     import subprocess
-    if os.name == "posix":
-        try:
-            subprocess.run(["fuser", "-k", "8008/tcp"], check=False, stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL)
-            time.sleep(0.8)
-        except Exception:
-            pass
+    try:
+        subprocess.run(["fuser", "-k", "8008/tcp"], check=False, stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL)
+        time.sleep(0.8)
+    except Exception:
+        pass
     if colab_app is not None:
         uvicorn.run(colab_app, host="0.0.0.0", port=8008, log_level="warning")
 
