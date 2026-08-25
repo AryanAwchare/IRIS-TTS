@@ -96,8 +96,8 @@ async def validate_audio_upload(file: UploadFile) -> bytes:
         except Exception:
             pass
 
-    min_dur = getattr(s, "min_sample_duration_seconds", 6.0)
-    max_dur = s.max_sample_duration_seconds
+    min_dur = getattr(s, "min_sample_duration_seconds", 3.0)
+    max_dur = getattr(s, "max_sample_duration_seconds", 300.0)
 
     if duration is not None:
         if duration < min_dur:
@@ -114,7 +114,7 @@ async def validate_audio_upload(file: UploadFile) -> bytes:
                 status_code=status.HTTP_422_UNPROCESSABLE_ENTITY,
                 detail=(
                     f"Audio sample is {duration:.1f} seconds long. "
-                    f"Maximum allowed duration is {max_dur:.0f} seconds. "
+                    f"Maximum allowed duration is {max_dur:.0f} seconds (5 minutes). "
                     "Please trim your recording and try again."
                 ),
             )

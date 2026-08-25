@@ -49,8 +49,8 @@ try:
         
         # Audio Limits & Formats
         min_sample_duration_seconds: float = Field(default=3.0, alias="MIN_SAMPLE_DURATION_SECONDS")
-        max_sample_duration_seconds: float = Field(default=120.0, alias="MAX_SAMPLE_DURATION_SECONDS")
-        max_upload_size_bytes: int = Field(default=20971520, alias="MAX_UPLOAD_SIZE_BYTES")
+        max_sample_duration_seconds: float = Field(default=300.0, alias="MAX_SAMPLE_DURATION_SECONDS")
+        max_upload_size_bytes: int = Field(default=104857600, alias="MAX_UPLOAD_SIZE_BYTES")
         allowed_audio_formats: List[str] = Field(
             default=[
                 "audio/wav", "audio/mpeg", "audio/mp3", "audio/x-mp3",

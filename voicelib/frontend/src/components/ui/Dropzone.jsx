@@ -58,9 +58,9 @@ export function Dropzone({
     if (!f) return
     setClientError(null)
 
-    // Client-side size check (20 MB)
-    if (f.size > 20 * 1024 * 1024) {
-      setClientError('File exceeds 20 MB. Please trim the audio.')
+    // Client-side size check (100 MB)
+    if (f.size > 100 * 1024 * 1024) {
+      setClientError('File exceeds 100 MB. Please trim the audio.')
       setFile(null)
       onFileAccepted?.(null)
       return
@@ -77,9 +77,9 @@ export function Dropzone({
       })
       URL.revokeObjectURL(url)
 
-      // Only reject if duration is finite and strictly > 31 seconds
-      if (Number.isFinite(audio.duration) && audio.duration > 31) {
-        setClientError(`Audio is ${Math.round(audio.duration)}s long. Maximum allowed duration is 30 seconds.`)
+      // Only reject if duration is finite and strictly > 301 seconds (5 mins)
+      if (Number.isFinite(audio.duration) && audio.duration > 301) {
+        setClientError(`Audio is ${Math.round(audio.duration)}s long. Maximum allowed duration is 5 minutes (300 seconds).`)
         setFile(null)
         onFileAccepted?.(null)
         return
@@ -145,7 +145,7 @@ export function Dropzone({
                 {isDragActive ? 'Drop your audio file here' : 'Drop audio file here'}
               </p>
               <p className="text-sm font-medium text-surface-200 mt-1.5">
-                MP3, WAV, M4A, OGG, FLAC · Max 30s · Max 20 MB
+                MP3, WAV, M4A, OGG, FLAC · Max 5 mins (300s) · Max 100 MB
               </p>
               <p className="text-sm font-semibold text-primary-300 mt-2.5">Or click to browse files</p>
             </div>

@@ -33,7 +33,7 @@ function EmptyState({ onAdd }) {
       <span className="eyebrow mb-4">Your library is empty</span>
       <h2 className="text-2xl sm:text-3xl font-bold text-white mb-3">No cloned voices yet</h2>
       <p className="text-base text-surface-200 mb-8 text-center max-w-md font-medium leading-relaxed">
-        Upload a short audio sample (up to 30s) to clone a voice with high fidelity and add it to your library.
+        Upload an audio sample (up to 5 mins) to clone a voice with high fidelity and add it to your library.
       </p>
       <button onClick={onAdd} className="btn-primary">
         <PlusIcon className="w-5 h-5" />
