@@ -25,12 +25,12 @@ logger = logging.getLogger(__name__)
 
 # Canonical Emotion Table & Chatterbox Hyperparameters (IRIS Research Paper Table I)
 CANONICAL_EMOTIONS: Dict[str, Dict[str, float]] = {
-    "neutral":   {"base_cfg": 0.70, "min_exag": 0.05, "max_exag": 0.10, "base_speed": 1.00, "pitch": 0.0},
-    "calm":      {"base_cfg": 0.75, "min_exag": 0.00, "max_exag": 0.05, "base_speed": 0.92, "pitch": -0.8},
-    "happy":     {"base_cfg": 0.58, "min_exag": 0.18, "max_exag": 0.32, "base_speed": 1.08, "pitch": 1.5},
-    "excited":   {"base_cfg": 0.48, "min_exag": 0.32, "max_exag": 0.50, "base_speed": 1.20, "pitch": 2.5},
-    "sad":       {"base_cfg": 0.65, "min_exag": 0.08, "max_exag": 0.20, "base_speed": 0.86, "pitch": -1.5},
-    "angry":     {"base_cfg": 0.52, "min_exag": 0.28, "max_exag": 0.45, "base_speed": 1.15, "pitch": 1.2},
+    "neutral":   {"base_cfg": 0.62, "min_exag": 0.03, "max_exag": 0.08, "base_speed": 1.00, "pitch": 0.0},
+    "calm":      {"base_cfg": 0.68, "min_exag": 0.00, "max_exag": 0.04, "base_speed": 0.94, "pitch": -0.5},
+    "happy":     {"base_cfg": 0.54, "min_exag": 0.14, "max_exag": 0.26, "base_speed": 1.06, "pitch": 1.0},
+    "excited":   {"base_cfg": 0.46, "min_exag": 0.25, "max_exag": 0.40, "base_speed": 1.15, "pitch": 1.8},
+    "sad":       {"base_cfg": 0.62, "min_exag": 0.06, "max_exag": 0.15, "base_speed": 0.88, "pitch": -1.0},
+    "angry":     {"base_cfg": 0.50, "min_exag": 0.22, "max_exag": 0.36, "base_speed": 1.12, "pitch": 1.0},
 }
 
 # Transformer Label to Canonical Emotion Mapping

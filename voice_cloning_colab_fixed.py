@@ -206,25 +206,105 @@ def pitch_preserving_time_stretch(y: np.ndarray, rate: float) -> np.ndarray:
         indices = np.linspace(0, len(y) - 1, max(1, int(len(y) / rate)))
         return np.interp(indices, np.arange(len(y)), y).astype(np.float32)
 
+def _peaking_filter(audio: np.ndarray, sr: int, center_freq: float, gain_db: float, q: float = 1.0) -> np.ndarray:
+    if abs(gain_db) < 0.05 or len(audio) < 15:
+        return audio
+    nyq = sr * 0.5
+    if center_freq >= nyq * 0.98:
+        return audio
+    A = 10.0 ** (gain_db / 40.0)
+    w0 = 2.0 * np.pi * center_freq / sr
+    alpha = np.sin(w0) / (2.0 * q)
+    b0 = 1.0 + alpha * A
+    b1 = -2.0 * np.cos(w0)
+    b2 = 1.0 - alpha * A
+    a0 = 1.0 + alpha / A
+    a1 = -2.0 * np.cos(w0)
+    a2 = 1.0 - alpha / A
+    b = np.array([b0, b1, b2], dtype=np.float64) / a0
+    a = np.array([a0, a1, a2], dtype=np.float64) / a0
+    return signal.lfilter(b, a, audio).astype(np.float32)
+
+def _shelf_filter(audio: np.ndarray, sr: int, cutoff: float, gain_db: float) -> np.ndarray:
+    if abs(gain_db) < 0.05 or len(audio) < 15:
+        return audio
+    nyq = sr * 0.5
+    if cutoff >= nyq * 0.98:
+        return audio
+    A = 10.0 ** (gain_db / 40.0)
+    w0 = 2.0 * np.pi * cutoff / sr
+    alpha = np.sin(w0) / 2.0 * np.sqrt((A + 1.0 / A) * (1.0 / 0.707 - 1.0) + 2.0)
+    cos_w0 = np.cos(w0)
+    b0 = A * ((A + 1) + (A - 1) * cos_w0 + 2 * np.sqrt(A) * alpha)
+    b1 = -2 * A * ((A - 1) + (A + 1) * cos_w0)
+    b2 = A * ((A + 1) + (A - 1) * cos_w0 - 2 * np.sqrt(A) * alpha)
+    a0 = (A + 1) - (A - 1) * cos_w0 + 2 * np.sqrt(A) * alpha
+    a1 = 2 * ((A - 1) - (A + 1) * cos_w0)
+    a2 = (A + 1) - (A - 1) * cos_w0 - 2 * np.sqrt(A) * alpha
+    b = np.array([b0, b1, b2], dtype=np.float64) / a0
+    a = np.array([a0, a1, a2], dtype=np.float64) / a0
+    return signal.lfilter(b, a, audio).astype(np.float32)
+
 def enhance_voice_mastering(audio_np: np.ndarray, sr: int = 32000) -> np.ndarray:
     """
-    Transparent vocal normalizer:
-    - Removes sub-audible DC offset (<30Hz)
-    - Applies clean peak ceiling limiter (-0.3 dBFS)
-    - Preserves 100% of authentic speaker vocal timbre
+    Studio Anti-Harshness Vocal Mastering:
+    - 65Hz High-pass rumble filter
+    - Smooth Noise Gate (-44 dBFS) for dead silence during speech pauses
+    - Chest Warmth (+1.8dB @ 240Hz) for full, natural body
+    - De-Harsher (-3.0dB @ 3.4kHz) removing piercing digital AI glare
+    - De-Esser (-2.5dB @ 7.2kHz) softening harsh sibilant 's', 'sh' sounds
+    - Ultrasonic filter (13.5kHz) eliminating vocoder hiss
+    - Tube saturation rounding off sharp transients
+    - True-Peak Limiter (-0.5 dBFS)
     """
     audio = audio_np.copy().astype(np.float32)
     nyq = sr * 0.5
 
-    if 30.0 / nyq < 1.0:
-        b_hp, a_hp = signal.butter(2, 30.0 / nyq, btype='highpass')
+    # 1. Clean sub-bass rumble (<65Hz)
+    if (65.0 / nyq) < 1.0 and len(audio) > 15:
+        b_hp, a_hp = signal.butter(3, 65.0 / nyq, btype='highpass')
         audio = signal.filtfilt(b_hp, a_hp, audio).astype(np.float32)
 
+    # 2. Smooth Noise Gate to eliminate pause hiss
+    threshold = 10 ** (-44.0 / 20.0)
+    frame = max(1, int(sr * 0.008))
+    atk_samples = max(1, int(sr * 0.010))
+    rel_samples = max(1, int(sr * 0.090))
+    gain = 1.0
+    for i in range(0, len(audio), frame):
+        chunk = audio[i : i + frame]
+        rms = np.sqrt(np.mean(chunk ** 2) + 1e-12)
+        target = 1.0 if rms >= threshold else 0.05
+        if target > gain:
+            gain = min(1.0, gain + frame / atk_samples)
+        else:
+            gain = max(0.05, gain - frame / rel_samples)
+        audio[i : i + frame] = chunk * gain
+
+    # 3. Chest Warmth (+1.8dB @ 240Hz)
+    audio = _peaking_filter(audio, sr, center_freq=240.0, gain_db=1.8, q=0.9)
+
+    # 4. Anti-Harshness (-3.0dB @ 3.4kHz) — Removes sharp digital edge
+    audio = _peaking_filter(audio, sr, center_freq=3400.0, gain_db=-3.0, q=1.3)
+
+    # 5. De-Esser (-2.5dB @ 7.2kHz) — Softens piercing consonants
+    audio = _shelf_filter(audio, sr, cutoff=7200.0, gain_db=-2.5)
+
+    # 6. Ultrasonic Lowpass (13.5kHz) — Removes high-end vocoder hiss
+    if (13500.0 / nyq) < 0.95 and len(audio) > 15:
+        b_lp, a_lp = signal.butter(2, 13500.0 / nyq, btype='lowpass')
+        audio = signal.filtfilt(b_lp, a_lp, audio).astype(np.float32)
+
+    # 7. Analog Tube Saturation (rounds sharp peaks, adds harmonic warmth)
+    even = (audio ** 2) - np.mean(audio ** 2)
+    audio = np.tanh((audio + 0.035 * even) * 1.02).astype(np.float32)
+
+    # 8. True-Peak Limiter (-0.5 dBFS)
     max_val = float(np.max(np.abs(audio))) + 1e-9
-    if max_val > 0.01:
-        target_peak = 10 ** (-0.3 / 20.0)  # ~ -0.3 dBFS
-        audio = audio * (target_peak / max(max_val, 1.0))
-        audio = np.clip(audio, -0.99, 0.99)
+    target_peak = 10 ** (-0.5 / 20.0)
+    if max_val > target_peak:
+        audio = audio * (target_peak / max_val)
+    audio = np.clip(audio, -0.98, 0.98)
 
     return audio.astype(np.float32)
 
@@ -248,12 +328,12 @@ def split_text_into_sentences(text: str, min_chars: int = 40) -> list[str]:
 
 # ── 4. VOICE SIMILARITY & EVALUATION ENGINES ───────────────────────────────
 EMOTION_PARAMS = {
-    "neutral": {"exaggeration": 0.05, "cfg_weight": 0.70},
-    "calm":    {"exaggeration": 0.00, "cfg_weight": 0.75},
-    "happy":   {"exaggeration": 0.25, "cfg_weight": 0.55},
-    "excited": {"exaggeration": 0.40, "cfg_weight": 0.45},
-    "sad":     {"exaggeration": 0.15, "cfg_weight": 0.65},
-    "angry":   {"exaggeration": 0.35, "cfg_weight": 0.50},
+    "neutral": {"exaggeration": 0.04, "cfg_weight": 0.62},
+    "calm":    {"exaggeration": 0.01, "cfg_weight": 0.68},
+    "happy":   {"exaggeration": 0.20, "cfg_weight": 0.54},
+    "excited": {"exaggeration": 0.35, "cfg_weight": 0.46},
+    "sad":     {"exaggeration": 0.10, "cfg_weight": 0.62},
+    "angry":   {"exaggeration": 0.28, "cfg_weight": 0.50},
 }
 
 _ECAPA_CLASSIFIER = None
