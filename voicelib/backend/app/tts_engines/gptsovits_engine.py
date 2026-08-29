@@ -25,6 +25,25 @@ from app.config import get_settings
 from app.tts_engines.base import BaseTTSEngine
 from app.utils.text_formatter import enhance_prompt_text
 
+# ── Live Colab URL store — updated at runtime via POST /colab-register ────────
+# This allows the Colab notebook to push its ngrok URL to the backend on startup,
+# eliminating the need to manually copy-paste the URL into .env each session.
+_live_colab_url: str = ""
+_live_colab_url_lock = threading.Lock()
+
+
+def set_live_colab_url(url: str) -> None:
+    """Update the in-process Colab GPU URL. Called by POST /colab-register."""
+    global _live_colab_url
+    with _live_colab_url_lock:
+        _live_colab_url = url.rstrip("/")
+
+
+def get_live_colab_url() -> str:
+    """Return the currently registered live Colab GPU URL (empty if not set)."""
+    with _live_colab_url_lock:
+        return _live_colab_url
+
 logger = logging.getLogger(__name__)
 
 # Paralinguistic tag mapping
@@ -78,7 +97,7 @@ class GPTSoVITSEngine(BaseTTSEngine):
             return
 
         settings = get_settings()
-        self._colab_api_url = settings.colab_gpu_api_url or os.getenv("COLAB_GPU_API_URL", self._colab_api_url)
+        self._colab_api_url = get_live_colab_url() or settings.colab_gpu_api_url or os.getenv("COLAB_GPU_API_URL", self._colab_api_url)
 
         model_path = os.getenv("GPT_SOVITS_MODEL_PATH", "")
         logger.info(f"Initializing GPT-SoVITS v3 engine (Model path: '{model_path or 'auto'}', Colab GPU URL: '{self._colab_api_url}')...")
@@ -210,41 +229,66 @@ class GPTSoVITSEngine(BaseTTSEngine):
             try:
                 import requests
 
-                # Send raw cached audio to Colab — Colab has its own cleaning pipeline.
-                # Double-preprocessing strips vital speaker harmonics and formant detail.
-                clean_ref_bytes = ref_bytes
-                logger.info("Sending raw reference audio to Colab (Colab handles cleaning).")
+                # Compact reference audio (max 12s, mono 24-32kHz) to ensure fast upload over ngrok (<400KB)
+                def _compact_audio(raw: bytes) -> bytes:
+                    try:
+                        import io, soundfile as sf, numpy as np, librosa
+                        y, sr = sf.read(io.BytesIO(raw))
+                        if y.ndim > 1:
+                            y = np.mean(y, axis=1)
+                        max_len = int(sr * 12.0)
+                        if len(y) > max_len:
+                            y = y[:max_len]
+                        target_sr = min(sr, 32000)
+                        if sr != target_sr:
+                            y = librosa.resample(y.astype(np.float32), orig_sr=sr, target_sr=target_sr)
+                            sr = target_sr
+                        buf = io.BytesIO()
+                        sf.write(buf, y.astype(np.float32), sr, format='WAV', subtype='PCM_16')
+                        return buf.getvalue()
+                    except Exception:
+                        return raw
+
+                clean_ref_bytes = _compact_audio(ref_bytes)
+                logger.info(f"Sending compact reference audio to Colab ({len(clean_ref_bytes)} bytes)...")
 
                 settings = get_settings()
-                colab_url = (settings.colab_gpu_api_url or os.getenv("COLAB_GPU_API_URL", self._colab_api_url)).rstrip("/")
+                colab_url = (get_live_colab_url() or settings.colab_gpu_api_url or os.getenv("COLAB_GPU_API_URL", self._colab_api_url)).rstrip("/")
                 
                 # 3-Attempt Exponential Backoff Retry Loop for Ngrok Tunnel Resilience
                 max_retries = 3
                 res = None
                 for attempt in range(1, max_retries + 1):
                     try:
-                        # Only send pitch if user explicitly set a non-zero value
-                        # Chatterbox handles speaker pitch from the reference audio
                         explicit_pitch = pitch if abs(pitch) > 0.05 else 0.0
-
+                        payload_data = {
+                            "text": cleaned_text,
+                            "emotion": emotion,
+                            "speed": str(active_speed),
+                            "pitch": str(explicit_pitch),
+                            "cfg_weight": str(cfg_weight),
+                            "exaggeration": str(exaggeration),
+                            "language": text_lang,
+                        }
+                        req_headers = {
+                            "ngrok-skip-browser-warning": "true",
+                            "Accept": "audio/wav",
+                            "User-Agent": "VoiceLib-Backend/1.0",
+                        }
+                        # Cell 3 Colab server: POST /tts with field "reference_audio"
+                        endpoint = f"{colab_url}/tts"
+                        files = {
+                            "reference_audio": ("reference.wav", clean_ref_bytes, "audio/wav"),
+                        }
                         res = requests.post(
-                            f"{colab_url}/synthesize",
-                            files={"ref_audio": ("sample.wav", clean_ref_bytes, "audio/wav")},
-                            data={
-                                "text": cleaned_text,
-                                "emotion": emotion,
-                                "speed": str(active_speed),
-                                "pitch": str(explicit_pitch),
-                                "cfg_weight": str(cfg_weight),
-                                "exaggeration": str(exaggeration),
-                                "language": text_lang,
-                            },
-                            headers={
-                                "ngrok-skip-browser-warning": "true",
-                                "Accept": "audio/wav",
-                                "User-Agent": "VoiceLib-Backend/1.0",
-                            },
-                            timeout=60.0,
+                            endpoint,
+                            files=files,
+                            data=payload_data,
+                            headers=req_headers,
+                            # (connect_timeout, read_timeout) tuple:
+                            # 15s connect, 900s read — 5000 chars = ~100 sentences on T4.
+                            # 900s (15 min) read timeout handles 5000-char synthesis.
+                            timeout=(15.0, 900.0),
                         )
                         if res.status_code == 200 and len(res.content) > 44:
                             logger.info(f"⚡ Generated audio via Chatterbox Colab GPU Server (Attempt {attempt})!")
@@ -274,10 +318,10 @@ class GPTSoVITSEngine(BaseTTSEngine):
 
         # 5. Colab GPU offline notification (Never output noisy sine/formant waves)
         settings = get_settings()
-        colab_url = settings.colab_gpu_api_url or self._colab_api_url
+        colab_url = get_live_colab_url() or settings.colab_gpu_api_url or self._colab_api_url
         raise RuntimeError(
             f"Neural Voice Cloning GPU server is offline (connected to {colab_url}). "
-            "Please start or restart Cell 7 in your Google Colab notebook to generate speech!"
+            "Please run Cell 3 in your Google Colab notebook to activate the GPU server!"
         )
 
     def _apply_acoustic_modifiers(

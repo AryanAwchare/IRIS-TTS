@@ -96,6 +96,10 @@ def invalidate_cache(voice_id: str, engine_id: Optional[str] = None) -> None:
     get_engine(eid).invalidate_cache(voice_id)
 
 
+# Alias used by voices_router — keep both names in sync
+invalidate_voice_cache = invalidate_cache
+
+
 def generate_audio(
     voice_state: Any,
     text: str,

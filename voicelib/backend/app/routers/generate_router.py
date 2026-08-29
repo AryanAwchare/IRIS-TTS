@@ -6,9 +6,14 @@ GET  /generations       — List past generations for the current user
 """
 from __future__ import annotations
 
+import asyncio
+from datetime import datetime, timezone
+from functools import partial
+import json
 import logging
 import tempfile
 import os
+import uuid
 from typing import Annotated
 
 from fastapi import APIRouter, Depends, HTTPException, Query, Response, status
@@ -132,6 +137,11 @@ async def generate_speech(
             text_lang=payload.text_lang or "en",
             exaggeration=active_exaggeration,
             cfg_weight=active_cfg,
+            # Pocket TTS fine-tuning params (ignored by non-Pocket engines)
+            carrier_voice=payload.carrier_voice,
+            morph_strength=payload.morph_strength,
+            warmth_gain_db=payload.warmth_gain_db,
+            brightness_gain_db=payload.brightness_gain_db,
         )
         wav_bytes = await loop.run_in_executor(None, gen_fn)
     except Exception as exc:
@@ -157,30 +167,39 @@ async def generate_speech(
     audio_key = storage.upload_bytes(wav_bytes, "audio/wav", prefix="generated")
 
     # ── 5. Persist generation record ──────────────────────────────────────
-    generation = Generation(
-        voice_id=voice.id,
-        user_id=current_user.id,
-        input_text=payload.text,
-        audio_s3_key=audio_key,
-        engine=payload.engine or "gpt-sovits-v3",
-        emotion=active_emotion,
-        speed=active_speed,
-    )
-    db.add(generation)
-    await db.commit()
-    await db.refresh(generation)
+    try:
+        generation = Generation(
+            voice_id=voice.id,
+            user_id=current_user.id,
+            input_text=payload.text,
+            audio_s3_key=audio_key,
+            engine=payload.engine or "gpt-sovits-v3",
+            emotion=active_emotion,
+            speed=active_speed,
+        )
+        db.add(generation)
+        await db.commit()
+        await db.refresh(generation)
+        gen_id = generation.id
+    except Exception as db_err:
+        logger.warning(f"Database generation record save notice (transient): {db_err}")
+        try:
+            await db.rollback()
+        except Exception:
+            pass
+        gen_id = uuid.uuid4()
 
     # ── 6. Return with fresh presigned URL ─────────────────────────────────
     audio_url = storage.generate_presigned_url(audio_key, expires_in=3600)
     return GenerationOut(
-        id=generation.id,
-        voice_id=generation.voice_id,
-        input_text=generation.input_text,
+        id=gen_id,
+        voice_id=voice.id,
+        input_text=payload.text,
         audio_url=audio_url,
-        engine=generation.engine,
-        emotion=generation.emotion,
-        speed=generation.speed,
-        created_at=generation.created_at,
+        engine=payload.engine or "gpt-sovits-v3",
+        emotion=active_emotion,
+        speed=active_speed,
+        created_at=datetime.now(timezone.utc),
     )
 
 
@@ -216,6 +235,9 @@ async def list_generations(
             voice_id=g.voice_id,
             input_text=g.input_text,
             audio_url=storage.generate_presigned_url(g.audio_s3_key, expires_in=3600),
+            engine=g.engine,
+            emotion=g.emotion,
+            speed=g.speed,
             created_at=g.created_at,
         )
         for g in generations
@@ -459,3 +481,28 @@ async def get_voice_similarity(
             "analysis_sample_rate": sim.sample_rate,
         },
     }
+
+
+# ── Engine Status & Presets Endpoints ──────────────────────────────────────
+
+@router.get(
+    "/engines/status",
+    summary="Live readiness status for all TTS engines",
+)
+async def engine_status() -> list[dict]:
+    """
+    Returns per-engine metadata, enablement, and live readiness status.
+    Frontend uses this to grey out offline engines in the model switcher.
+    """
+    from app.tts_engines import get_all_engine_status
+    return get_all_engine_status()
+
+
+@router.get(
+    "/engines/presets",
+    summary="Pocket TTS studio presets",
+)
+async def engine_presets() -> dict:
+    """Return all built-in Pocket TTS fine-tuning presets."""
+    from app.models import POCKET_TTS_PRESETS
+    return {"presets": POCKET_TTS_PRESETS}

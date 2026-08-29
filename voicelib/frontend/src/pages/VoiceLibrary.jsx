@@ -54,15 +54,17 @@ export default function VoiceLibrary() {
       {/* Header */}
       <div className="flex flex-col sm:flex-row sm:items-end justify-between gap-6 mb-12 animate-fade-up">
         <div>
-          <span className="eyebrow mb-3 inline-block">Voice Library</span>
-          <h1 className="text-4xl sm:text-5xl font-bold text-white tracking-tight">Your Voices</h1>
-          <p className="text-base text-surface-200 mt-2 font-medium">
-            {voices.length} {voices.length === 1 ? 'voice' : 'voices'} saved in your personal library
+          <span className="eyebrow mb-3 inline-block">// VOICE ARCHIVE</span>
+          <h1 className="text-4xl sm:text-5xl font-display font-bold text-bone tracking-tight">
+            VOICE <span style={{ color: '#E5FF00' }}>LIBRARY</span>
+          </h1>
+          <p className="text-sm font-mono text-surface-400 mt-2">
+            // {voices.length} {voices.length === 1 ? 'PROFILE' : 'PROFILES'} LOADED IN NEURAL REGISTER
           </p>
         </div>
         <button
           onClick={() => setShowModal(true)}
-          className="btn-primary shrink-0"
+          className="btn-acid shrink-0"
           id="add-voice-btn"
         >
           <PlusIcon className="w-5 h-5" />

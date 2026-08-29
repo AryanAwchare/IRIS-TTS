@@ -109,9 +109,11 @@ async def colab_status() -> dict:
     import urllib.request
     import json
     from app.config import get_settings
+    from app.tts_engines.gptsovits_engine import get_live_colab_url
 
     settings = get_settings()
-    url = settings.colab_gpu_api_url.rstrip("/")
+    live_url = get_live_colab_url()
+    url = (live_url or settings.colab_gpu_api_url).rstrip("/")
 
     try:
         req = urllib.request.Request(
@@ -127,10 +129,11 @@ async def colab_status() -> dict:
                 return {
                     "online": True,
                     "url": url,
-                    "model": body.get("model", "chatterbox-tts"),
+                    "model": body.get("model", body.get("engine", "chatterbox-tts")),
                     "gpu": body.get("gpu", "CUDA GPU"),
                     "cuda": body.get("cuda", True),
                     "sample_rate": body.get("sample_rate", 32000),
+                    "auto_registered": bool(live_url),
                 }
     except Exception as e:
         logger.debug(f"Colab GPU server ping failed: {e}")
@@ -141,5 +144,33 @@ async def colab_status() -> dict:
         "model": None,
         "gpu": None,
         "cuda": False,
-        "message": "Colab GPU server not running locally on port 8008. Run Step 7 in Colab notebook to activate GPU.",
+        "auto_registered": bool(live_url),
+        "message": "Colab GPU server not reachable. Run Cell 3 in your Colab notebook to activate.",
     }
+
+
+@app.post("/colab-register", tags=["health"])
+async def colab_register(payload: dict) -> dict:
+    """
+    Called automatically by the Colab notebook on startup to register its ngrok URL.
+    Eliminates the need to manually copy-paste the URL into .env each session.
+    Requires COLAB_REGISTER_SECRET to prevent unauthorised URL injection.
+    """
+    from fastapi import HTTPException
+    from app.config import get_settings
+    from app.tts_engines.gptsovits_engine import set_live_colab_url
+
+    settings = get_settings()
+    provided_secret = payload.get("secret", "")
+    url = (payload.get("url") or "").strip()
+
+    if provided_secret != settings.colab_register_secret:
+        raise HTTPException(status_code=403, detail="Invalid registration secret.")
+
+    if not url or (not url.startswith("https://") and not url.startswith("http://")):
+        raise HTTPException(status_code=400, detail="Payload must contain a valid 'url' starting with http:// or https://.")
+
+    set_live_colab_url(url)
+    logger.info(f"🚀 Colab GPU URL auto-registered: {url}")
+
+    return {"status": "registered", "url": url, "message": "Colab GPU server URL updated successfully."}

@@ -25,12 +25,21 @@ def _create_engine():
     return create_async_engine(
         url,
         echo=False,
-        pool_size=10,
-        max_overflow=20,
+        # Supabase transaction-mode pooler (port 6543) closes idle connections
+        # aggressively. Keep the pool small and recycle every 5 min to prevent
+        # "connection was closed in the middle of operation" 500 errors.
+        pool_size=5,
+        max_overflow=10,
         pool_pre_ping=True,
+        pool_recycle=300,
+        pool_timeout=30,
+        pool_reset_on_return="rollback",
         connect_args={
             "statement_cache_size": 0,
             "prepared_statement_cache_size": 0,
+            "server_settings": {
+                "application_name": "voicelib",
+            },
         },
     )
 

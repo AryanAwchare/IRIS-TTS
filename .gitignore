@@ -69,3 +69,5 @@ local_storage_data/
 *.swo
 .DS_Store
 Thumbs.db
+vite.config.js.timestamp-*
+*.timestamp-*.mjs

@@ -3,26 +3,12 @@ import {
   PlayIcon, PauseIcon, ArrowDownTrayIcon, ArrowPathIcon
 } from '@heroicons/react/24/solid'
 import { Spinner } from '../ui/Spinner'
+import { AudioCanvasVisualizer } from '../ui/AudioCanvasVisualizer'
 import { generateApi } from '../../api/generate'
 
-function WaveformBars({ playing }) {
-  const heights = [40, 70, 55, 90, 45, 80, 60, 100, 50, 75, 40, 65, 85]
-  return (
-    <div className="flex items-center gap-0.5 h-8">
-      {heights.map((h, i) => (
-        <div
-          key={i}
-          className="waveform-bar transition-all duration-300"
-          style={{
-            height: playing ? `${h}%` : '30%',
-            animationPlayState: playing ? 'running' : 'paused',
-            animationDelay: `${i * 60}ms`,
-          }}
-        />
-      ))}
-    </div>
-  )
-}
+/** Visualizer mode cycle */
+const MODES = ['bars', 'oscilloscope', 'particles']
+const MODE_LABELS = { bars: '≋', oscilloscope: '∿', particles: '✦' }
 
 export function AudioPlayer({ url, voiceName = 'audio', generationId = null, autoPlay = true }) {
   const audioRef = useRef(null)
@@ -32,6 +18,7 @@ export function AudioPlayer({ url, voiceName = 'audio', generationId = null, aut
   const [currentTime, setCurrentTime] = useState(0)
   const [audioError, setAudioError]   = useState(null)
   const [downloadingFmt, setDownloadingFmt] = useState(null)
+  const [vizMode, setVizMode]         = useState(0) // index into MODES
 
   useEffect(() => {
     setPlaying(false)
@@ -137,16 +124,22 @@ export function AudioPlayer({ url, voiceName = 'audio', generationId = null, aut
       }
     } catch (err) {
       console.error('Download error:', err)
-      // Fallback direct link
       window.open(url, '_blank')
     } finally {
       setDownloadingFmt(null)
     }
   }
 
+  const cycleMode = () => setVizMode((m) => (m + 1) % MODES.length)
+  const currentMode = MODES[vizMode]
+
   return (
-    <div className="card-shell" key={generationId || url}>
-      <div className="card-inner space-y-4">
+    <div
+      className="card-tactical"
+      key={generationId || url}
+      style={playing ? { boxShadow: '0 0 20px rgba(229,255,0,0.12)', borderColor: 'rgba(229,255,0,0.2)' } : {}}
+    >
+      <div className="card-tactical-inner space-y-4">
         <audio
           ref={audioRef}
           src={url}
@@ -159,103 +152,132 @@ export function AudioPlayer({ url, voiceName = 'audio', generationId = null, aut
 
         {/* Error message */}
         {audioError && (
-          <div className="text-red-400 text-sm text-center py-2 bg-red-500/10 border border-red-500/20 rounded-xl">
-            ⚠️ {audioError}
+          <div className="text-crimson text-sm text-center py-2 rounded-xl font-mono"
+            style={{ background: 'rgba(255,0,60,0.08)', border: '1px solid rgba(255,0,60,0.2)' }}>
+            ⚠ {audioError}
           </div>
         )}
 
-        {/* Waveform */}
-        <div className="flex items-center justify-center py-2">
-          <WaveformBars playing={playing} />
+        {/* ── Canvas Visualizer ────────────────────────────────────── */}
+        <div className="relative rounded-xl overflow-hidden" style={{ background: 'rgba(0,0,0,0.3)' }}>
+          <AudioCanvasVisualizer
+            audioRef={audioRef}
+            mode={currentMode}
+            height={72}
+            isPlaying={playing}
+          />
+          {/* Mode toggle pill */}
+          <button
+            onClick={cycleMode}
+            type="button"
+            title={`Visualizer: ${currentMode}`}
+            className="absolute top-2 right-2 w-7 h-7 rounded-full flex items-center justify-center font-mono text-[11px] font-bold transition-all hover:scale-110 active:scale-95"
+            style={{
+              background: 'rgba(229,255,0,0.12)',
+              border: '1px solid rgba(229,255,0,0.25)',
+              color: '#E5FF00',
+            }}
+            aria-label={`Switch visualizer mode, current: ${currentMode}`}
+          >
+            {MODE_LABELS[currentMode]}
+          </button>
         </div>
 
-        {/* Progress bar */}
+        {/* ── Progress bar — acid yellow ───────────────────────────── */}
         <div
-          className="h-1.5 bg-white/[0.08] rounded-full cursor-pointer overflow-hidden relative"
+          className="h-1 rounded-full cursor-pointer overflow-hidden relative"
+          style={{ background: 'rgba(255,255,255,0.06)' }}
           onClick={handleSeek}
           role="slider"
           aria-label="Audio progress"
           aria-valuenow={progress}
         >
           <div
-            className="h-full bg-primary-500 rounded-full transition-all duration-100 ease-linear shadow-glow-sm"
-            style={{ width: `${progress}%` }}
+            className="h-full rounded-full transition-all duration-100 ease-linear"
+            style={{
+              width: `${progress}%`,
+              background: playing
+                ? 'linear-gradient(90deg, #E5FF00, #FF003C)'
+                : '#E5FF00',
+              boxShadow: playing ? '0 0 8px rgba(229,255,0,0.5)' : 'none',
+            }}
           />
         </div>
 
-        {/* Controls */}
+        {/* ── Controls ─────────────────────────────────────────────── */}
         <div className="flex items-center justify-between pt-1 gap-2 flex-wrap sm:flex-nowrap">
-          <span className="text-sm font-semibold text-surface-200 font-mono tabular-nums min-w-[75px]">
+          {/* Time */}
+          <span className="text-xs font-mono tabular-nums min-w-[75px]"
+            style={{ color: 'rgba(226,226,223,0.6)' }}>
             {fmt(currentTime)} / {fmt(duration)}
           </span>
 
+          {/* Play controls */}
           <div className="flex items-center gap-3">
-            {/* Replay Button */}
+            {/* Replay */}
             <button
               onClick={handleReplay}
               type="button"
-              className="w-9 h-9 rounded-full bg-white/[0.06] hover:bg-white/[0.12] border border-white/[0.1]
-                         flex items-center justify-center text-surface-200 hover:text-white
-                         transition-all duration-200 active:scale-95 shrink-0"
-              title="Hear again from start"
-              aria-label="Hear again from start"
+              className="w-9 h-9 rounded-full flex items-center justify-center transition-all duration-200 hover:scale-110 active:scale-95"
+              style={{
+                background: 'rgba(229,255,0,0.07)',
+                border: '1px solid rgba(229,255,0,0.2)',
+                color: 'rgba(229,255,0,0.7)',
+              }}
+              title="Replay from start"
+              aria-label="Replay from start"
             >
               <ArrowPathIcon className="w-4 h-4" />
             </button>
 
-            {/* Main Play / Pause Button */}
+            {/* Main Play / Pause */}
             <button
               onClick={togglePlay}
               type="button"
-              className="w-12 h-12 rounded-full bg-primary-500 hover:bg-primary-600
-                         flex items-center justify-center shadow-glow
-                         transition-all duration-300 ease-spring hover:scale-105 active:scale-95 shrink-0"
+              className="w-12 h-12 rounded-full flex items-center justify-center transition-all duration-300 ease-spring hover:scale-105 active:scale-95 shrink-0"
+              style={{
+                background: playing ? '#FF003C' : '#E5FF00',
+                boxShadow: playing
+                  ? '0 0 20px rgba(255,0,60,0.5)'
+                  : '0 0 16px rgba(229,255,0,0.4)',
+              }}
               aria-label={playing ? 'Pause' : 'Play'}
             >
               {playing
                 ? <PauseIcon className="w-6 h-6 text-white" />
-                : <PlayIcon  className="w-6 h-6 text-white ml-0.5" />
+                : <PlayIcon  className="w-6 h-6 text-obsidian ml-0.5" />
               }
             </button>
           </div>
 
-          {/* Download Buttons (MP3 + WAV) */}
-          <div className="relative">
-            <div className="inline-flex rounded-xl shadow-sm border border-white/[0.1] bg-white/[0.04] p-0.5">
-              <button
-                type="button"
-                onClick={() => handleDownload('mp3')}
-                disabled={downloadingFmt === 'mp3'}
-                className="inline-flex items-center gap-1.5 px-3 py-1.5 text-xs sm:text-sm font-semibold text-primary-300 hover:text-white hover:bg-primary-500/20 rounded-lg transition-colors disabled:opacity-50"
-                title="Download as high-compatibility MP3"
-              >
-                {downloadingFmt === 'mp3' ? (
-                  <Spinner size="xs" />
-                ) : (
-                  <ArrowDownTrayIcon className="w-4 h-4" />
-                )}
-                <span>MP3</span>
-              </button>
-              <span className="w-px bg-white/[0.1] my-1"></span>
-              <button
-                type="button"
-                onClick={() => handleDownload('wav')}
-                disabled={downloadingFmt === 'wav'}
-                className="inline-flex items-center gap-1.5 px-3 py-1.5 text-xs sm:text-sm font-semibold text-surface-200 hover:text-white hover:bg-white/[0.08] rounded-lg transition-colors disabled:opacity-50"
-                title="Download as lossless WAV"
-              >
-                {downloadingFmt === 'wav' ? (
-                  <Spinner size="xs" />
-                ) : (
-                  <ArrowDownTrayIcon className="w-4 h-4" />
-                )}
-                <span>WAV</span>
-              </button>
-            </div>
+          {/* Download buttons */}
+          <div className="inline-flex rounded-xl p-0.5 gap-0.5"
+            style={{ background: 'rgba(255,255,255,0.04)', border: '1px solid rgba(255,255,255,0.08)' }}>
+            <button
+              type="button"
+              onClick={() => handleDownload('mp3')}
+              disabled={downloadingFmt === 'mp3'}
+              className="inline-flex items-center gap-1.5 px-3 py-1.5 rounded-lg text-xs font-mono font-semibold transition-colors disabled:opacity-50"
+              style={{ color: '#E5FF00' }}
+              title="Download as MP3"
+            >
+              {downloadingFmt === 'mp3' ? <Spinner size="xs" /> : <ArrowDownTrayIcon className="w-3.5 h-3.5" />}
+              MP3
+            </button>
+            <button
+              type="button"
+              onClick={() => handleDownload('wav')}
+              disabled={downloadingFmt === 'wav'}
+              className="inline-flex items-center gap-1.5 px-3 py-1.5 rounded-lg text-xs font-mono font-semibold transition-colors disabled:opacity-50"
+              style={{ color: 'rgba(226,226,223,0.7)' }}
+              title="Download as WAV"
+            >
+              {downloadingFmt === 'wav' ? <Spinner size="xs" /> : <ArrowDownTrayIcon className="w-3.5 h-3.5" />}
+              WAV
+            </button>
           </div>
         </div>
       </div>
     </div>
   )
 }
-

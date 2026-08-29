@@ -1,3 +1,4 @@
+import { useState, useCallback } from 'react'
 import { BrowserRouter, Routes, Route, Navigate, Outlet } from 'react-router-dom'
 import { Navbar } from './components/layout/Navbar'
 import { ProtectedRoute } from './components/layout/ProtectedRoute'
@@ -7,24 +8,37 @@ import VoiceLibrary from './pages/VoiceLibrary'
 import Generate from './pages/Generate'
 import SongCover from './pages/SongCover'
 
-function AppLayout() {
+// Shared GPU status lifted to App level so Navbar can display it
+// without prop-drilling through every route. Generate page calls
+// setGpuStatus via the onGpuStatus prop.
+function AppLayout({ gpuStatus }) {
   return (
     <>
-      <Navbar />
+      <Navbar gpuStatus={gpuStatus} />
       <Outlet />
     </>
   )
 }
 
-function ProtectedLayout() {
+function ProtectedLayout({ gpuStatus }) {
   return (
     <ProtectedRoute>
-      <AppLayout />
+      <AppLayout gpuStatus={gpuStatus} />
     </ProtectedRoute>
   )
 }
 
 export default function App() {
+  const [gpuStatus, setGpuStatus] = useState({ online: false, label: 'OFFLINE' })
+
+  const handleGpuStatus = useCallback((statuses) => {
+    const neural = statuses?.find(e => e.id === 'gpt-sovits-v3')
+    setGpuStatus({
+      online: neural?.ready || false,
+      label:  neural?.ready ? 'ONLINE' : 'OFFLINE',
+    })
+  }, [])
+
   return (
     <BrowserRouter>
       <Routes>
@@ -33,9 +47,9 @@ export default function App() {
         <Route path="/register" element={<Register />} />
 
         {/* Protected routes with shared layout */}
-        <Route element={<ProtectedLayout />}>
+        <Route element={<ProtectedLayout gpuStatus={gpuStatus} />}>
           <Route path="/library"    element={<VoiceLibrary />} />
-          <Route path="/generate"   element={<Generate />} />
+          <Route path="/generate"   element={<Generate onGpuStatus={handleGpuStatus} />} />
           <Route path="/song-cover" element={<SongCover />} />
         </Route>
 

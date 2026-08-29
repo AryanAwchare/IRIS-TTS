@@ -13,6 +13,14 @@ export const generateApi = {
   getColabStatus: () =>
     client.get('/colab-status').then((r) => r.data),
 
+  // Model Switcher — live engine status
+  engineStatus: () =>
+    client.get('/engines/status').then((r) => r.data),
+
+  // Pocket TTS Studio presets
+  presets: () =>
+    client.get('/engines/presets').then((r) => r.data),
+
   downloadAudio: async (generationId, format = 'wav', customFilename = null) => {
     const res = await client.get(`/generations/${generationId}/download`, {
       params: { format },

@@ -167,8 +167,10 @@ class PocketTTSEngine(BaseTTSEngine):
         carrier_state = voice_state
         acoustic_profile: Optional[Dict[str, Any]] = None
         base_f0 = 160.0
+        voice_state_dict: Optional[Dict[str, Any]] = None
 
         if isinstance(voice_state, dict):
+            voice_state_dict = voice_state
             if "carrier_state" in voice_state and "acoustic_profile" in voice_state:
                 carrier_state = voice_state["carrier_state"]
                 acoustic_profile = voice_state["acoustic_profile"]
@@ -189,6 +191,25 @@ class PocketTTSEngine(BaseTTSEngine):
             acoustic_profile = derived["acoustic_profile"]
             base_f0 = derived.get("base_f0", 160.0)
 
+        # ── Carrier voice override from frontend ──────────────────────────
+        carrier_voice_override = kwargs.get("carrier_voice")
+        if carrier_voice_override and carrier_voice_override != "auto":
+            override_key = carrier_voice_override.lower().strip()
+            if override_key in CATALOG_VOICES:
+                try:
+                    carrier_state = self._model.get_state_for_audio_prompt(override_key)
+                    base_f0 = CATALOG_VOICES[override_key]["f0"]
+                    logger.info(f"Pocket TTS: carrier voice overridden to '{override_key}' (F0={base_f0:.1f}Hz)")
+                except Exception as ov_err:
+                    logger.warning(f"Carrier override '{override_key}' failed ({ov_err}), keeping auto-selected")
+            else:
+                logger.warning(f"Unknown carrier voice '{override_key}', keeping auto-selected")
+
+        # ── Fine-tuning parameters from frontend ──────────────────────────
+        morph_strength = kwargs.get("morph_strength", 0.85)
+        warmth_gain_db = kwargs.get("warmth_gain_db", 0.0)
+        brightness_gain_db = kwargs.get("brightness_gain_db", 0.0)
+
         # 1. Synthesize base human speech via Pocket TTS
         audio_tensor = self._model.generate_audio(carrier_state, text)
         if hasattr(audio_tensor, "detach"):
@@ -208,7 +229,9 @@ class PocketTTSEngine(BaseTTSEngine):
                     sr=self._sample_rate,
                     target_profile=acoustic_profile,
                     base_voice_f0=base_f0,
-                    morph_strength=0.85,
+                    morph_strength=morph_strength,
+                    warmth_override_db=warmth_gain_db,
+                    brightness_override_db=brightness_gain_db,
                 )
             except Exception as morph_err:
                 logger.warning(f"Acoustic timbre morphing fallback ({morph_err})")

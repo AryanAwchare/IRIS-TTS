@@ -1,17 +1,17 @@
-import { useEffect, useState } from 'react'
+import { useEffect, useState, useRef, useCallback } from 'react'
 import { useSearchParams, Link } from 'react-router-dom'
 import {
-  SparklesIcon, MicrophoneIcon, ClockIcon, AdjustmentsHorizontalIcon,
-  AdjustmentsVerticalIcon, FaceSmileIcon, CommandLineIcon, CpuChipIcon, BoltIcon
+  SparklesIcon, MicrophoneIcon, AdjustmentsHorizontalIcon,
+  FaceSmileIcon, CommandLineIcon, CpuChipIcon, BoltIcon
 } from '@heroicons/react/24/outline'
-import { PlayIcon, ArrowDownTrayIcon, CheckIcon, ChartBarIcon } from '@heroicons/react/24/solid'
+import { PlayIcon, ChartBarIcon } from '@heroicons/react/24/solid'
 import { useVoiceStore } from '../store/useVoiceStore'
 import { generateApi } from '../api/generate'
 import { AudioPlayer } from '../components/generate/AudioPlayer'
 import { ErrorBanner } from '../components/ui/ErrorBanner'
 import { Spinner } from '../components/ui/Spinner'
-import { useAuthStore } from '../store/useAuthStore'
 import VoiceSimilarityModal from '../components/generate/VoiceSimilarityModal'
+import InteractiveHero from '../components/generate/InteractiveHero'
 
 const MAX_CHARS = 5000
 
@@ -24,11 +24,28 @@ const PARALINGUISTIC_TAGS = [
   { tag: '[clears throat]', label: '🗣️ Throat', color: 'bg-orange-500/10 border-orange-500/30 text-orange-300' },
 ]
 
-const ENGINES = [
-  { id: 'gpt-sovits-v3', name: 'Neural Voice Cloning', desc: 'Zero-shot deep learning cloning with XTTS-v2 & Colab GPU', badge: 'High Fidelity' },
-  { id: 'zonos-expressive', name: 'Zonos TTS Expressive', desc: 'Expressive 8D emotion vectors & acoustic conditioning', badge: 'Expressive' },
-  { id: 'pocket-tts', name: 'Standard Fast TTS', desc: 'Fast CPU local synthesis fallback', badge: 'Fast' },
+const CARRIER_VOICES = [
+  { id: 'auto', label: 'Auto (Best Match)' },
+  { id: 'jean', label: 'Jean (Male, Deep)' },
+  { id: 'marius', label: 'Marius (Male, Mid)' },
+  { id: 'françois', label: 'François (Male, Warm)' },
+  { id: 'alba', label: 'Alba (Female, Alto)' },
+  { id: 'laura', label: 'Laura (Female, Mid)' },
+  { id: 'anna', label: 'Anna (Female, Bright)' },
 ]
+
+const POCKET_PRESETS = {
+  natural_conversational: { label: '🎙️ Natural', carrier_voice: null, morph_strength: 0.85, warmth_gain_db: 0, brightness_gain_db: 0, speed: 1.0 },
+  studio_broadcast: { label: '📻 Broadcast', carrier_voice: null, morph_strength: 0.90, warmth_gain_db: 1.5, brightness_gain_db: 1.0, speed: 0.95 },
+  crisp_narration: { label: '📖 Narration', carrier_voice: null, morph_strength: 0.80, warmth_gain_db: -0.5, brightness_gain_db: 2.0, speed: 0.90 },
+  deep_warmth: { label: '🔥 Deep Warmth', carrier_voice: null, morph_strength: 0.90, warmth_gain_db: 3.5, brightness_gain_db: -1.0, speed: 0.92 },
+}
+
+const ENGINE_ICON = {
+  'pocket-tts': '🧠',
+  'gpt-sovits-v3': '⚡',
+  'zonos-expressive': '🎭',
+}
 
 function GenerationHistoryItem({ gen, isSelected, isLatest, onPlay, onAnalyze }) {
   const [downloadingFmt, setDownloadingFmt] = useState(null)
@@ -133,7 +150,7 @@ function GenerationHistoryItem({ gen, isSelected, isLatest, onPlay, onAnalyze })
 }
 
 
-export default function Generate() {
+export default function Generate({ onGpuStatus }) {
   const [params] = useSearchParams()
   const { voices, fetchVoices, isLoading: voicesLoading } = useVoiceStore()
 
@@ -146,13 +163,21 @@ export default function Generate() {
   const [latestResult, setLatestResult]         = useState(null)
   const [history, setHistory]                   = useState([])
 
-  // Colab External GPU Status
+  // Colab External GPU Status (legacy) + Engine Status (new)
   const [colabStatus, setColabStatus]           = useState(null)
+  const [engineStatuses, setEngineStatuses]     = useState([])
+
+  // Pocket TTS Fine-Tuning State
+  const [carrierVoice, setCarrierVoice]         = useState('auto')
+  const [morphStrength, setMorphStrength]       = useState(0.85)
+  const [warmthGainDb, setWarmthGainDb]         = useState(0.0)
+  const [brightnessGainDb, setBrightnessGainDb] = useState(0.0)
+  const [activePreset, setActivePreset]         = useState('natural_conversational')
 
   // Voice similarity modal
   const [similarityGen, setSimilarityGen]       = useState(null)
 
-  // Studio Control Tabs: 'text' | 'emotions' | 'hyperparams'
+  // Studio Control Tabs: 'text' | 'emotions' | 'hyperparams' | 'pocket'
   const [activeTab, setActiveTab]               = useState('text')
   const [selectedEmotion, setSelectedEmotion]   = useState('auto')
 
@@ -178,19 +203,53 @@ export default function Generate() {
   const [speed, setSpeed]                       = useState(1.0)
   const [pitch, setPitch]                       = useState(0)
 
+  // Restore Pocket TTS settings from localStorage
+  useEffect(() => {
+    try {
+      const saved = localStorage.getItem('iris_pocket_tts_settings')
+      if (saved) {
+        const s = JSON.parse(saved)
+        if (s.carrierVoice) setCarrierVoice(s.carrierVoice)
+        if (s.morphStrength != null) setMorphStrength(s.morphStrength)
+        if (s.warmthGainDb != null) setWarmthGainDb(s.warmthGainDb)
+        if (s.brightnessGainDb != null) setBrightnessGainDb(s.brightnessGainDb)
+        if (s.activePreset) setActivePreset(s.activePreset)
+      }
+    } catch { /* ignore */ }
+  }, [])
+
+  // Persist Pocket TTS settings to localStorage
+  useEffect(() => {
+    localStorage.setItem('iris_pocket_tts_settings', JSON.stringify({
+      carrierVoice, morphStrength, warmthGainDb, brightnessGainDb, activePreset,
+    }))
+  }, [carrierVoice, morphStrength, warmthGainDb, brightnessGainDb, activePreset])
+
   useEffect(() => {
     fetchVoices()
-    
-    // Poll Colab GPU status
-    const checkColab = () => {
-      generateApi.getColabStatus()
-        .then((s) => setColabStatus(s))
-        .catch(() => setColabStatus({ online: false }))
+
+    // Poll engine statuses (replaces old Colab-only poll)
+    const checkEngines = () => {
+      generateApi.engineStatus()
+        .then((statuses) => {
+          setEngineStatuses(statuses)
+          // Derive legacy colabStatus for backwards compat
+          const neural = statuses.find(e => e.id === 'gpt-sovits-v3')
+          setColabStatus({ online: neural?.ready || false, gpu: neural?.description })
+          // Notify App-level GPU status for Navbar indicator
+          if (typeof onGpuStatus === 'function') onGpuStatus(statuses)
+        })
+        .catch(() => {
+          // Fallback to legacy Colab status endpoint
+          generateApi.getColabStatus()
+            .then((s) => setColabStatus(s))
+            .catch(() => setColabStatus({ online: false }))
+        })
     }
-    checkColab()
-    const interval = setInterval(checkColab, 15000)
+    checkEngines()
+    const interval = setInterval(checkEngines, 15000)
     return () => clearInterval(interval)
-  }, [fetchVoices])
+  }, [fetchVoices, onGpuStatus])
 
   // Sync selected voice from URL query params
   useEffect(() => {
@@ -262,12 +321,61 @@ export default function Generate() {
     setText(s)
   }
 
+  const applyPreset = (presetKey) => {
+    const p = POCKET_PRESETS[presetKey]
+    if (!p) return
+    setActivePreset(presetKey)
+    if (p.carrier_voice != null) setCarrierVoice(p.carrier_voice || 'auto')
+    setMorphStrength(p.morph_strength)
+    setWarmthGainDb(p.warmth_gain_db)
+    setBrightnessGainDb(p.brightness_gain_db)
+    if (p.speed) setSpeed(p.speed)
+  }
+
+  const resetPocketDefaults = () => {
+    setCarrierVoice('auto')
+    setMorphStrength(0.85)
+    setWarmthGainDb(0.0)
+    setBrightnessGainDb(0.0)
+    setActivePreset('natural_conversational')
+    setSpeed(1.0)
+  }
+
+  // ── Zonos 8D Emotion Vector handlers ─────────────────────────────────────
+  const handleEmotionChange = (emo, value) => {
+    setEmotions((prev) => ({
+      ...prev,
+      [emo]: Math.min(1, Math.max(0, parseFloat(value) || 0)),
+    }))
+    setSelectedEmotion('custom')
+  }
+
+  const normalizeEmotions = () => {
+    setEmotions((prev) => {
+      const total = Object.values(prev).reduce((s, v) => s + v, 0)
+      if (total < 0.001) {
+        // All zero — distribute evenly
+        const keys = Object.keys(prev)
+        const even = parseFloat((1.0 / keys.length).toFixed(3))
+        return Object.fromEntries(keys.map((k) => [k, even]))
+      }
+      return Object.fromEntries(
+        Object.entries(prev).map(([k, v]) => [k, parseFloat((v / total).toFixed(3))])
+      )
+    })
+  }
+  // ─────────────────────────────────────────────────────────────────────────
+
+  const getEngineStatus = (engineId) => {
+    return engineStatuses.find(e => e.id === engineId) || { status: 'unknown', ready: false }
+  }
+
   const handleGenerate = async () => {
     if (!canGenerate) return
     setError(null)
     setLoading(true)
     try {
-      const gen = await generateApi.generate(selectedVoiceId, text, {
+      const opts = {
         engine,
         emotion: selectedEmotion,
         rank,
@@ -276,8 +384,16 @@ export default function Generate() {
         text_lang: textLang,
         emotions,
         speed,
-        pitch
-      })
+        pitch,
+      }
+      // Include Pocket TTS params only when that engine is selected
+      if (engine === 'pocket-tts') {
+        opts.carrier_voice = carrierVoice === 'auto' ? null : carrierVoice
+        opts.morph_strength = morphStrength
+        opts.warmth_gain_db = warmthGainDb
+        opts.brightness_gain_db = brightnessGainDb
+      }
+      const gen = await generateApi.generate(selectedVoiceId, text, opts)
       setLatestResult(gen)
       setActiveResult(gen)
       refreshHistory()
@@ -288,69 +404,103 @@ export default function Generate() {
     }
   }
 
+  // Scroll-to-studio ref for hero CTA button
+  const studioRef = useRef(null)
+  const scrollToStudio = useCallback(() => {
+    studioRef.current?.scrollIntoView({ behavior: 'smooth', block: 'start' })
+  }, [])
+
+  // Engine pill styling per engine
+  const engineStyle = (eid, isActive) => {
+    if (eid === 'pocket-tts') return isActive
+      ? { background: 'rgba(255,145,0,0.18)', border: '1px solid rgba(255,145,0,0.4)', color: '#FF9100', boxShadow: '0 0 10px rgba(255,145,0,0.25)' }
+      : { border: '1px solid rgba(255,145,0,0.15)', color: 'rgba(255,145,0,0.6)' }
+    if (eid === 'gpt-sovits-v3') return isActive
+      ? { background: 'rgba(229,255,0,0.15)', border: '1px solid rgba(229,255,0,0.4)', color: '#E5FF00', boxShadow: '0 0 12px rgba(229,255,0,0.25)' }
+      : { border: '1px solid rgba(229,255,0,0.15)', color: 'rgba(229,255,0,0.6)' }
+    if (eid === 'zonos-expressive') return isActive
+      ? { background: 'rgba(255,0,60,0.15)', border: '1px solid rgba(255,0,60,0.4)', color: '#FF003C', boxShadow: '0 0 12px rgba(255,0,60,0.25)' }
+      : { border: '1px solid rgba(255,0,60,0.15)', color: 'rgba(255,0,60,0.6)' }
+    return {}
+  }
 
   return (
-    <div className="min-h-dvh pt-28 pb-16 px-4 sm:px-8 max-w-6xl mx-auto">
-      {/* Studio Header */}
-      <div className="mb-8 animate-fade-up flex flex-col md:flex-row md:items-end justify-between gap-6">
-        <div>
-          <span className="eyebrow mb-3 inline-block">AI Voice Studio • Neural Voice Cloning</span>
-          <h1 className="text-4xl sm:text-5xl font-bold text-white tracking-tight">Voice Cloning & Speech Synthesis</h1>
-          <p className="text-base text-surface-200 mt-2 font-medium">
-            Fine-tune vocal characteristics, emotions, and perform zero-shot neural voice cloning.
-          </p>
+    <div className="min-h-dvh pb-16">
+      {/* ── Interactive Hero ──────────────────────────────────────── */}
+      <InteractiveHero
+        engineStatuses={engineStatuses}
+        isPlaying={!!activeResult}
+        onScrollDown={scrollToStudio}
+      />
+
+      {/* ── Studio Body ──────────────────────────────────────────── */}
+      <div ref={studioRef} className="px-4 sm:px-8 max-w-6xl mx-auto pt-10">
+
+        {/* Engine Switcher — Tactical Pills */}
+        <div className="mb-6 animate-fade-up flex flex-wrap items-center gap-2">
+          <span className="font-mono text-[10px] uppercase tracking-widest text-surface-500 mr-2">// Engine</span>
+          {engineStatuses.length > 0 ? engineStatuses.map((e) => {
+            const isActive = engine === e.id
+            const isReady = e.ready || e.status === 'not_loaded'
+            return (
+              <button
+                key={e.id}
+                onClick={() => isReady && setEngine(e.id)}
+                disabled={!isReady}
+                title={isReady ? e.description : `${e.name} — ${e.status}`}
+                className={`px-4 py-2 rounded-xl text-sm font-display font-semibold transition-all flex items-center gap-2 ${
+                  !isReady ? 'opacity-40 cursor-not-allowed' : 'hover:opacity-100 cursor-pointer'
+                }`}
+                style={engineStyle(e.id, isActive)}
+              >
+                <span>{ENGINE_ICON[e.id] || '🔊'}</span>
+                <span>{e.name}</span>
+                <span className={`w-1.5 h-1.5 rounded-full ${
+                  e.status === 'ready' ? 'bg-acid animate-pulse'
+                    : e.status === 'not_loaded' ? 'bg-amber-signal'
+                    : 'bg-crimson'
+                }`} />
+              </button>
+            )
+          }) : (
+            ['pocket-tts', 'gpt-sovits-v3', 'zonos-expressive'].map((eid) => (
+              <button
+                key={eid}
+                onClick={() => setEngine(eid)}
+                className="px-4 py-2 rounded-xl text-sm font-display font-semibold transition-all"
+                style={engineStyle(eid, engine === eid)}
+              >
+                {ENGINE_ICON[eid]} {eid === 'pocket-tts' ? 'Pocket CPU' : eid === 'gpt-sovits-v3' ? 'Neural GPU' : 'Zonos 8D'}
+              </button>
+            ))
+          )}
         </div>
 
-        {/* Engine Badge Selector */}
-        <div className="flex items-center gap-2 bg-white/[0.04] border border-white/[0.1] p-2 rounded-2xl shrink-0">
-          {ENGINES.map((e) => (
-            <button
-              key={e.id}
-              onClick={() => setEngine(e.id)}
-              className={`px-4 py-2.5 rounded-xl text-sm font-semibold transition-all ${
-                engine === e.id
-                  ? 'bg-primary-500 text-white shadow-glow-sm'
-                  : 'text-surface-200 hover:bg-white/[0.08] hover:text-white'
-              }`}
-            >
-              {e.name}
-            </button>
-          ))}
-        </div>
-      </div>
-
-      {/* Colab External GPU Status Pill */}
+      {/* GPU Status Bar — Tactical style */}
       <div className="mb-6 animate-fade-up">
         {colabStatus?.online ? (
-          <div className="flex items-center justify-between px-4 py-3 rounded-2xl bg-emerald-500/10 border border-emerald-500/30 text-emerald-300 text-sm">
+          <div className="flex items-center justify-between px-4 py-2.5 rounded-xl font-mono text-xs"
+            style={{ background: 'rgba(229,255,0,0.07)', border: '1px solid rgba(229,255,0,0.2)' }}>
             <div className="flex items-center gap-3">
-              <span className="relative flex h-3 w-3">
-                <span className="animate-ping absolute inline-flex h-full w-full rounded-full bg-emerald-400 opacity-75"></span>
-                <span className="relative inline-flex rounded-full h-3 w-3 bg-emerald-500"></span>
-              </span>
-              <span className="font-semibold text-white">External GPU Active</span>
-              <span className="text-emerald-400/80 text-xs hidden sm:inline">
-                Connected to {colabStatus.gpu || 'CUDA GPU'} via Colab (XTTS-v2 Neural Engine)
+              <span className="gpu-dot-online" />
+              <span className="font-semibold text-acid tracking-wider uppercase">Neural GPU Active</span>
+              <span className="text-acid/50 hidden sm:inline">
+                // {colabStatus.gpu || 'CUDA GPU'} — Chatterbox TTS — Zero-Shot Mode
               </span>
             </div>
-            <span className="text-xs font-mono bg-emerald-500/20 px-2.5 py-1 rounded-lg text-emerald-200 border border-emerald-500/30">
-              ⚡ High-Speed Neural Inference
-            </span>
+            <span className="badge-telemetry-acid">⚡ GPU INFERENCE</span>
           </div>
         ) : (
-          <div className="flex items-center justify-between px-4 py-3 rounded-2xl bg-amber-500/10 border border-amber-500/30 text-amber-300 text-sm">
+          <div className="flex items-center justify-between px-4 py-2.5 rounded-xl font-mono text-xs"
+            style={{ background: 'rgba(255,145,0,0.06)', border: '1px solid rgba(255,145,0,0.18)' }}>
             <div className="flex items-center gap-3">
-              <span className="h-3 w-3 rounded-full bg-amber-500 shrink-0"></span>
-              <div>
-                <span className="font-semibold text-white">Colab External GPU Offline</span>
-                <span className="text-amber-200/80 text-xs block sm:inline sm:ml-2">
-                  (Run Step 7 in Colab notebook to activate Tesla T4 GPU neural cloning)
-                </span>
-              </div>
+              <span className="w-2 h-2 rounded-full shrink-0" style={{ background: '#FF9100' }} />
+              <span className="font-semibold tracking-wider uppercase" style={{ color: '#FF9100' }}>Neural GPU Offline</span>
+              <span className="text-surface-600 hidden sm:inline">
+                // Run Colab notebook to activate Tesla T4 GPU
+              </span>
             </div>
-            <span className="text-xs font-mono bg-amber-500/20 px-2.5 py-1 rounded-lg text-amber-200 border border-amber-500/30 shrink-0">
-              Local Standby
-            </span>
+            <span className="badge-telemetry-amber">// LOCAL STANDBY</span>
           </div>
         )}
       </div>
@@ -361,8 +511,8 @@ export default function Generate() {
           <ErrorBanner message={error} onDismiss={() => setError(null)} />
 
           {/* Voice Selector */}
-          <div className="card-shell">
-            <div className="card-inner">
+          <div className="card-tactical">
+            <div className="card-tactical-inner">
               <label htmlFor="voice-select" className="label">Cloned Voice Profile</label>
 
               {voicesLoading ? (
@@ -407,8 +557,8 @@ export default function Generate() {
           </div>
 
           {/* Studio Tabbed Controls */}
-          <div className="card-shell">
-            <div className="card-inner space-y-4">
+          <div className="card-tactical card-tactical-amber">
+            <div className="card-tactical-inner space-y-4">
               {/* Tab Header */}
               <div className="flex items-center border-b border-white/[0.1] pb-3 gap-6 overflow-x-auto">
                 <button
@@ -421,26 +571,42 @@ export default function Generate() {
                 >
                   <CommandLineIcon className="w-5 h-5" /> Script & Paralinguistics
                 </button>
-                <button
-                  onClick={() => setActiveTab('emotions')}
-                  className={`flex items-center gap-2 text-sm sm:text-base font-semibold pb-2 border-b-2 transition-all whitespace-nowrap ${
-                    activeTab === 'emotions'
-                      ? 'border-primary-500 text-white'
-                      : 'border-transparent text-surface-200 hover:text-white'
-                  }`}
-                >
-                  <FaceSmileIcon className="w-5 h-5" /> Zonos 8D Emotions
-                </button>
-                <button
-                  onClick={() => setActiveTab('hyperparams')}
-                  className={`flex items-center gap-2 text-sm sm:text-base font-semibold pb-2 border-b-2 transition-all whitespace-nowrap ${
-                    activeTab === 'hyperparams'
-                      ? 'border-primary-500 text-white'
-                      : 'border-transparent text-surface-200 hover:text-white'
-                  }`}
-                >
-                  <AdjustmentsHorizontalIcon className="w-5 h-5" /> GPT-SoVITS v3 Rank & Tuning
-                </button>
+                {engine === 'pocket-tts' && (
+                  <button
+                    onClick={() => setActiveTab('pocket')}
+                    className={`flex items-center gap-2 text-sm sm:text-base font-semibold pb-2 border-b-2 transition-all whitespace-nowrap ${
+                      activeTab === 'pocket'
+                        ? 'border-primary-500 text-white'
+                        : 'border-transparent text-surface-200 hover:text-white'
+                    }`}
+                  >
+                    <CpuChipIcon className="w-5 h-5" /> 🧠 Pocket TTS Studio
+                  </button>
+                )}
+                {(engine === 'zonos-expressive' || engine === 'gpt-sovits-v3') && (
+                  <button
+                    onClick={() => setActiveTab('emotions')}
+                    className={`flex items-center gap-2 text-sm sm:text-base font-semibold pb-2 border-b-2 transition-all whitespace-nowrap ${
+                      activeTab === 'emotions'
+                        ? 'border-primary-500 text-white'
+                        : 'border-transparent text-surface-200 hover:text-white'
+                    }`}
+                  >
+                    <FaceSmileIcon className="w-5 h-5" /> Zonos 8D Emotions
+                  </button>
+                )}
+                {engine !== 'pocket-tts' && (
+                  <button
+                    onClick={() => setActiveTab('hyperparams')}
+                    className={`flex items-center gap-2 text-sm sm:text-base font-semibold pb-2 border-b-2 transition-all whitespace-nowrap ${
+                      activeTab === 'hyperparams'
+                        ? 'border-primary-500 text-white'
+                        : 'border-transparent text-surface-200 hover:text-white'
+                    }`}
+                  >
+                    <AdjustmentsHorizontalIcon className="w-5 h-5" /> GPT-SoVITS v3 Rank & Tuning
+                  </button>
+                )}
               </div>
 
               {/* TAB 1: Script & Paralinguistics */}
@@ -542,6 +708,127 @@ export default function Generate() {
                         {text.length.toLocaleString()} / {MAX_CHARS.toLocaleString()}
                       </span>
                     </div>
+                  </div>
+                </div>
+              )}
+
+              {/* POCKET TTS STUDIO TAB */}
+              {activeTab === 'pocket' && engine === 'pocket-tts' && (
+                <div className="space-y-5 animate-fade-in">
+                  {/* Presets Row */}
+                  <div>
+                    <div className="flex items-center justify-between mb-2">
+                      <label className="label mb-0">Quick Presets</label>
+                      <button
+                        type="button"
+                        onClick={resetPocketDefaults}
+                        className="text-xs font-semibold text-surface-300 hover:text-white bg-white/[0.06] border border-white/[0.1] px-3 py-1 rounded-xl transition-all"
+                      >
+                        ↺ Reset Defaults
+                      </button>
+                    </div>
+                    <div className="grid grid-cols-2 sm:grid-cols-4 gap-2">
+                      {Object.entries(POCKET_PRESETS).map(([key, preset]) => (
+                        <button
+                          key={key}
+                          type="button"
+                          onClick={() => applyPreset(key)}
+                          className={`py-2.5 px-3 text-sm rounded-xl border transition-all text-center ${
+                            activePreset === key
+                              ? 'bg-primary-500/20 text-white border-primary-500/40 font-bold shadow-glow-sm'
+                              : 'bg-white/[0.04] border-white/[0.1] text-surface-200 hover:bg-white/[0.08] font-medium'
+                          }`}
+                        >
+                          {preset.label}
+                        </button>
+                      ))}
+                    </div>
+                  </div>
+
+                  {/* Carrier Voice Selector */}
+                  <div>
+                    <div className="flex items-center gap-2 mb-2">
+                      <label className="label mb-0">Carrier Voice</label>
+                      <span className="text-[10px] text-surface-300 bg-white/[0.06] px-2 py-0.5 rounded-md" title="The base voice Pocket TTS uses before acoustic morphing is applied">
+                        ℹ️ Base voice for morphing
+                      </span>
+                    </div>
+                    <select
+                      value={carrierVoice}
+                      onChange={(e) => { setCarrierVoice(e.target.value); setActivePreset(null) }}
+                      className="input appearance-none cursor-pointer"
+                    >
+                      {CARRIER_VOICES.map((cv) => (
+                        <option key={cv.id} value={cv.id}>{cv.label}</option>
+                      ))}
+                    </select>
+                  </div>
+
+                  {/* Morph Strength Slider */}
+                  <div>
+                    <div className="flex justify-between text-xs font-semibold mb-1.5">
+                      <div className="flex items-center gap-2">
+                        <span className="text-surface-200">Morph Strength</span>
+                        <span className="text-[10px] text-surface-300 bg-white/[0.06] px-2 py-0.5 rounded-md" title="How strongly the output is morphed toward your reference voice">
+                          ℹ️ Voice similarity intensity
+                        </span>
+                      </div>
+                      <span className="text-primary-300 font-mono">{morphStrength.toFixed(2)}</span>
+                    </div>
+                    <input
+                      type="range" min="0" max="1" step="0.05"
+                      value={morphStrength}
+                      onChange={(e) => { setMorphStrength(parseFloat(e.target.value)); setActivePreset(null) }}
+                      className="w-full h-2 bg-white/[0.1] rounded-lg appearance-none cursor-pointer accent-primary-500"
+                    />
+                    <div className="flex justify-between text-[10px] text-surface-400 mt-1">
+                      <span>0 — Original carrier</span>
+                      <span>1 — Full morph</span>
+                    </div>
+                  </div>
+
+                  {/* Warmth & Brightness Side-by-Side */}
+                  <div className="grid grid-cols-2 gap-5">
+                    <div>
+                      <div className="flex justify-between text-xs font-semibold mb-1.5">
+                        <div className="flex items-center gap-1">
+                          <span className="text-surface-200">Warmth</span>
+                          <span className="text-[10px] text-surface-400" title="Boost/cut low-mid frequencies (220Hz)">
+                            🔥
+                          </span>
+                        </div>
+                        <span className="text-primary-300 font-mono">{warmthGainDb > 0 ? `+${warmthGainDb.toFixed(1)}` : warmthGainDb.toFixed(1)} dB</span>
+                      </div>
+                      <input
+                        type="range" min="-6" max="6" step="0.5"
+                        value={warmthGainDb}
+                        onChange={(e) => { setWarmthGainDb(parseFloat(e.target.value)); setActivePreset(null) }}
+                        className="w-full h-2 bg-white/[0.1] rounded-lg appearance-none cursor-pointer accent-amber-500"
+                      />
+                    </div>
+                    <div>
+                      <div className="flex justify-between text-xs font-semibold mb-1.5">
+                        <div className="flex items-center gap-1">
+                          <span className="text-surface-200">Presence</span>
+                          <span className="text-[10px] text-surface-400" title="Boost/cut high-frequency clarity (4kHz)">
+                            ✨
+                          </span>
+                        </div>
+                        <span className="text-primary-300 font-mono">{brightnessGainDb > 0 ? `+${brightnessGainDb.toFixed(1)}` : brightnessGainDb.toFixed(1)} dB</span>
+                      </div>
+                      <input
+                        type="range" min="-6" max="6" step="0.5"
+                        value={brightnessGainDb}
+                        onChange={(e) => { setBrightnessGainDb(parseFloat(e.target.value)); setActivePreset(null) }}
+                        className="w-full h-2 bg-white/[0.1] rounded-lg appearance-none cursor-pointer accent-cyan-500"
+                      />
+                    </div>
+                  </div>
+
+                  {/* Active Settings Summary */}
+                  <div className="bg-white/[0.03] border border-white/[0.08] rounded-xl p-3 text-xs text-surface-300 font-mono">
+                    <span className="text-white font-semibold">Active Config:</span>{' '}
+                    carrier={carrierVoice}, morph={morphStrength}, warmth={warmthGainDb > 0 ? '+' : ''}{warmthGainDb}dB, presence={brightnessGainDb > 0 ? '+' : ''}{brightnessGainDb}dB
                   </div>
                 </div>
               )}
@@ -699,18 +986,22 @@ export default function Generate() {
               <>
                 <Spinner size="sm" />
                 <span>
-                  {colabStatus?.online
-                    ? '⚡ Synthesizing via Colab External GPU (XTTS-v2)...'
-                    : 'Synthesizing Audio...'}
+                  {engine === 'pocket-tts'
+                    ? '🧠 Synthesizing locally via Pocket TTS...'
+                    : colabStatus?.online
+                      ? '⚡ Synthesizing via Colab External GPU (XTTS-v2)...'
+                      : 'Synthesizing Audio...'}
                 </span>
               </>
             ) : (
               <>
                 <SparklesIcon className="w-6 h-6" />
                 <span>
-                  {colabStatus?.online
-                    ? 'Generate Cloned Speech (External GPU)'
-                    : 'Generate Cloned Speech (Local)'}
+                  {engine === 'pocket-tts'
+                    ? '🧠 Generate with Pocket TTS (Local CPU)'
+                    : colabStatus?.online
+                      ? '⚡ Generate Cloned Speech (External GPU)'
+                      : 'Generate Cloned Speech (Local)'}
                 </span>
               </>
             )}
@@ -780,7 +1071,7 @@ export default function Generate() {
               <AudioPlayer
                 key={activeResult.id || activeResult.audio_url}
                 url={activeResult.audio_url}
-                voiceName={activeVoice?.name}
+                voiceName={(voices.find((v) => v.id === activeResult?.voice_id) || selectedVoice)?.name || 'Cloned Voice'}
                 generationId={activeResult.id}
                 autoPlay={true}
               />
@@ -841,6 +1132,8 @@ export default function Generate() {
             </div>
           )}
         </div>
+      </div>
+
       </div>
 
       {/* Voice Similarity Modal */}

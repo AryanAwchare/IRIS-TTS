@@ -53,12 +53,14 @@ async def create_voice(
     raw_audio_bytes = await validate_audio_upload(file)
 
     # ── 2.1 Preprocess & clean audio for voice cloning ─────────────────────
+    # denoise=False: Colab and Pocket TTS each apply their own targeted cleaning.
+    # Pre-denoising at upload time strips vocal harmonics critical for speaker identity.
     from app.utils.audio_preprocess import preprocess_voice_sample
     audio_bytes = preprocess_voice_sample(
         raw_audio_bytes,
         target_sr=22050,
         trim_silence=True,
-        denoise=True,
+        denoise=False,
         normalize=True,
     )
 

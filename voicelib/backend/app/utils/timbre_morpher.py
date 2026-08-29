@@ -147,6 +147,8 @@ def morph_timbre(
     target_profile: Dict[str, Any],
     base_voice_f0: float = 160.0,
     morph_strength: float = 0.85,
+    warmth_override_db: float = 0.0,
+    brightness_override_db: float = 0.0,
 ) -> np.ndarray:
     """
     Apply natural acoustic timbre and spectral morphing to synthesized audio.
@@ -154,7 +156,8 @@ def morph_timbre(
     1. Formant matching & Vocal Tract Length scaling
     2. Dynamic parametric equalization matching target spectral envelope
     3. Warmth and harmonic presence enhancement
-    4. Anti-clipping soft saturation
+    4. Brightness / presence control
+    5. Anti-clipping soft saturation
     """
     if len(audio) == 0:
         return audio
@@ -181,59 +184,37 @@ def morph_timbre(
                 logger.debug(f"Pitch shift step notice: {ps_err}")
 
         # 2. Vocal Warmth / Low-End Presence (Peaking / Shelf Filter around 220Hz)
-        warmth_db = target_profile.get("warmth_gain_db", 0.0) * morph_strength
+        # User override takes priority; otherwise use profile-extracted warmth
+        warmth_db = warmth_override_db if abs(warmth_override_db) > 0.01 else (
+            target_profile.get("warmth_gain_db", 0.0) * morph_strength
+        )
         if abs(warmth_db) > 0.4:
-            f_center = 220.0
-            Q = 1.0
-            gain_linear = 10.0 ** (warmth_db / 20.0)
-            # 2nd order peaking biquad design
-            w0 = 2 * np.pi * f_center / sr
-            alpha = np.sin(w0) / (2 * Q)
-            A = np.sqrt(gain_linear)
-
-            b0 = 1 + alpha * A
-            b1 = -2 * np.cos(w0)
-            b2 = 1 - alpha * A
-            a0 = 1 + alpha / A
-            a1 = -2 * np.cos(w0)
-            a2 = 1 - alpha / A
-
-            b = np.array([b0, b1, b2]) / a0
-            a = np.array([a0, a1, a2]) / a0
-            out = signal.lfilter(b, a, out).astype(np.float32)
+            out = _apply_peaking_biquad(out, sr, f_center=220.0, gain_db=warmth_db, Q=1.0)
 
         # 3. Formant Resonance Matching (Mid-range F1/F2 adjustment)
         target_f2 = target_profile.get("f2", 1700.0)
         if 1000.0 < target_f2 < 3000.0 and target_f2 < nyq - 200:
-            # Resonant formant presence peaking filter
-            w0 = 2 * np.pi * target_f2 / sr
-            alpha = np.sin(w0) / (2 * 1.8)
             f2_gain_db = 1.5 * morph_strength
-            A = 10.0 ** (f2_gain_db / 40.0)
+            out = _apply_peaking_biquad(out, sr, f_center=target_f2, gain_db=f2_gain_db, Q=1.8)
 
-            b0 = 1 + alpha * A
-            b1 = -2 * np.cos(w0)
-            b2 = 1 - alpha * A
-            a0 = 1 + alpha / A
-            a1 = -2 * np.cos(w0)
-            a2 = 1 - alpha / A
-
-            b = np.array([b0, b1, b2]) / a0
-            a = np.array([a0, a1, a2]) / a0
-            out = signal.lfilter(b, a, out).astype(np.float32)
-
-        # 4. Spectral Air / Clarity Filter (High shelf above 6kHz)
-        centroid = target_profile.get("spectral_centroid", 1800.0)
-        if centroid > 2200.0:
-            # Bright speaker -> boost presence air (+1.5 dB)
-            air_f = min(6000.0, nyq - 500)
-            b_high, a_high = signal.butter(1, air_f / nyq, btype='high')
-            out += signal.lfilter(b_high, a_high, out) * 0.15 * morph_strength
-        elif centroid < 1400.0:
-            # Mellow/deep speaker -> gentle high-cut
-            cut_f = min(7000.0, nyq - 500)
-            b_low, a_low = signal.butter(2, cut_f / nyq, btype='low')
-            out = signal.lfilter(b_low, a_low, out).astype(np.float32)
+        # 4. Brightness / Presence Control (Peaking Filter around 4kHz)
+        # User-controlled brightness override
+        if abs(brightness_override_db) > 0.01:
+            brightness_f = min(4000.0, nyq - 500)
+            out = _apply_peaking_biquad(out, sr, f_center=brightness_f, gain_db=brightness_override_db, Q=1.2)
+        else:
+            # Fallback: auto brightness based on spectral centroid
+            centroid = target_profile.get("spectral_centroid", 1800.0)
+            if centroid > 2200.0:
+                # Bright speaker -> boost presence air (+1.5 dB)
+                air_f = min(6000.0, nyq - 500)
+                b_high, a_high = signal.butter(1, air_f / nyq, btype='high')
+                out += signal.lfilter(b_high, a_high, out) * 0.15 * morph_strength
+            elif centroid < 1400.0:
+                # Mellow/deep speaker -> gentle high-cut
+                cut_f = min(7000.0, nyq - 500)
+                b_low, a_low = signal.butter(2, cut_f / nyq, btype='low')
+                out = signal.lfilter(b_low, a_low, out).astype(np.float32)
 
         # 5. Subtle Harmonic Warmth (Soft non-linear saturation)
         # Prevents robotic / metallic dry sound
@@ -250,3 +231,30 @@ def morph_timbre(
     except Exception as exc:
         logger.warning(f"Timbre morphing encountered error ({exc}) — returning standard audio.")
         return audio
+
+
+def _apply_peaking_biquad(
+    audio: np.ndarray,
+    sr: int,
+    f_center: float,
+    gain_db: float,
+    Q: float = 1.0,
+) -> np.ndarray:
+    """Apply a 2nd-order peaking EQ biquad filter at f_center with gain_db."""
+    from scipy import signal
+
+    w0 = 2 * np.pi * f_center / sr
+    alpha = np.sin(w0) / (2 * Q)
+    gain_linear = 10.0 ** (gain_db / 20.0)
+    A = np.sqrt(gain_linear)
+
+    b0 = 1 + alpha * A
+    b1 = -2 * np.cos(w0)
+    b2 = 1 - alpha * A
+    a0 = 1 + alpha / A
+    a1 = -2 * np.cos(w0)
+    a2 = 1 - alpha / A
+
+    b = np.array([b0, b1, b2]) / a0
+    a = np.array([a0, a1, a2]) / a0
+    return signal.lfilter(b, a, audio).astype(np.float32)

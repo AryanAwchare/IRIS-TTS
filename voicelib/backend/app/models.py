@@ -171,6 +171,32 @@ class GenerateRequest(BaseModel):
     speed: Optional[float] = Field(default=1.0, ge=0.2, le=3.0, description="Speed multiplier")
     pitch: Optional[float] = Field(default=0.0, ge=-12.0, le=12.0, description="Pitch shift in semitones")
     text_lang: Optional[str] = Field(default="en", description="Target text language")
+    # Pocket TTS Fine-Tuning Parameters
+    carrier_voice: Optional[str] = Field(default=None, description="Pocket TTS carrier voice override (auto, jean, marius, françois, alba, laura, anna)")
+    morph_strength: Optional[float] = Field(default=0.85, ge=0.0, le=1.0, description="Acoustic timbre morphing intensity")
+    warmth_gain_db: Optional[float] = Field(default=0.0, ge=-6.0, le=6.0, description="Low-mid vocal warmth gain in dB")
+    brightness_gain_db: Optional[float] = Field(default=0.0, ge=-6.0, le=6.0, description="High-frequency presence/clarity gain in dB")
+
+
+# Pocket TTS Studio Presets (carrier_voice, morph, warmth_db, brightness_db, speed)
+POCKET_TTS_PRESETS = {
+    "natural_conversational": {
+        "carrier_voice": None, "morph_strength": 0.85,
+        "warmth_gain_db": 0.0, "brightness_gain_db": 0.0, "speed": 1.0,
+    },
+    "studio_broadcast": {
+        "carrier_voice": None, "morph_strength": 0.90,
+        "warmth_gain_db": 1.5, "brightness_gain_db": 1.0, "speed": 0.95,
+    },
+    "crisp_narration": {
+        "carrier_voice": None, "morph_strength": 0.80,
+        "warmth_gain_db": -0.5, "brightness_gain_db": 2.0, "speed": 0.90,
+    },
+    "deep_warmth": {
+        "carrier_voice": None, "morph_strength": 0.90,
+        "warmth_gain_db": 3.5, "brightness_gain_db": -1.0, "speed": 0.92,
+    },
+}
 
 
 class GenerationOut(BaseModel):

@@ -48,7 +48,7 @@ try:
         gpu_name = torch.cuda.get_device_name(0)
         vram_gb = torch.cuda.get_device_properties(0).total_memory / (1024**3)
         print(f"🔥 Active GPU: {gpu_name} ({vram_gb:.2f} GB VRAM)")
-        os.system("nvidia-smi")
+        # Skip nvidia-smi to save 2-3s startup time; GPU info already printed above
     else:
         print("⚠️ Warning: No GPU detected! Please go to Runtime -> Change runtime type -> Select GPU.")
 except ImportError:
@@ -324,11 +324,14 @@ def _get_ecapa_classifier():
             except ImportError:
                 from speechbrain.pretrained import EncoderClassifier
             
+            # Use CUDA GPU when available — 10-20x faster than CPU
+            ecapa_device = "cuda" if (torch is not None and torch.cuda.is_available()) else "cpu"
             _ECAPA_CLASSIFIER = EncoderClassifier.from_hparams(
                 source="speechbrain/spkrec-ecapa-voxceleb",
                 savedir=os.path.join(os.path.expanduser("~"), ".cache", "speechbrain", "ecapa"),
-                run_opts={"device": "cpu"}
+                run_opts={"device": ecapa_device}
             )
+            print(f"✅ ECAPA-TDNN speaker encoder loaded on {ecapa_device.upper()}")
         except Exception as e:
             print(f"⚠️ SpeechBrain ECAPA classifier notice: {e}")
             _ECAPA_CLASSIFIER = None
@@ -400,12 +403,16 @@ def _get_whisper_model():
     if _WHISPER_MODEL is None:
         try:
             from faster_whisper import WhisperModel
+            # Use CUDA GPU with float16 when available — 15-30x faster than CPU int8
+            whisper_device = "cuda" if (torch is not None and torch.cuda.is_available()) else "cpu"
+            whisper_compute = "float16" if whisper_device == "cuda" else "int8"
             _WHISPER_MODEL = WhisperModel(
                 "small.en",
-                device="cpu",
-                compute_type="int8",
+                device=whisper_device,
+                compute_type=whisper_compute,
                 download_root=os.path.join(os.path.expanduser("~"), ".cache", "whisper")
             )
+            print(f"✅ Faster-Whisper (small.en) loaded on {whisper_device.upper()} ({whisper_compute})")
         except Exception as e:
             print(f"⚠️ faster-whisper notice: {e}")
             _WHISPER_MODEL = None
@@ -415,6 +422,7 @@ def word_error_rate(intended_text: str, gen_wav_path_or_bytes: Any) -> Optional[
     """Computes Word Error Rate (WER) using faster-whisper and jiwer."""
     if not intended_text or not intended_text.strip():
         return 0.0
+    temp_path = None
     try:
         import jiwer
         model_w = _get_whisper_model()
@@ -422,7 +430,6 @@ def word_error_rate(intended_text: str, gen_wav_path_or_bytes: Any) -> Optional[
             return None
 
         import tempfile
-        temp_path = None
         if isinstance(gen_wav_path_or_bytes, bytes):
             t = tempfile.NamedTemporaryFile(suffix=".wav", delete=False)
             t.write(gen_wav_path_or_bytes)
@@ -571,6 +578,7 @@ if colab_app is not None:
                 with open(ref_path, "wb") as f_ref_out:
                     f_ref_out.write(clean_wav_bytes)
 
+                original_ref_path = ref_path
                 try:
                     ref_path = select_best_segment(ref_path, target_duration=10.0)
                 except Exception as vad_err:
@@ -663,11 +671,12 @@ if colab_app is not None:
 
                 gen_np = enhance_voice_mastering(gen_np, sr=gen_sr)
 
-                try:
-                    if os.path.exists(ref_path):
-                        os.unlink(ref_path)
-                except Exception:
-                    pass
+                for p in {original_ref_path, ref_path}:
+                    try:
+                        if p and os.path.exists(p):
+                            os.unlink(p)
+                    except Exception:
+                        pass
 
                 if torch and torch.cuda.is_available():
                     torch.cuda.empty_cache()
@@ -676,39 +685,55 @@ if colab_app is not None:
                 sf.write(out_buf, gen_np, gen_sr, format='WAV', subtype='PCM_16')
                 wav_bytes = out_buf.getvalue()
 
-                similarity_score = calculate_voice_similarity(y_ref, gen_np, sr=gen_sr)
-                wer_score = word_error_rate(clean_text, wav_bytes)
-                prosody_var = calculate_prosody_variance(gen_np, sr=gen_sr)
                 latency_s = time.perf_counter() - req_start_time
 
-                log_entry = {
-                    "timestamp": datetime.now(timezone.utc).isoformat(),
-                    "emotion_requested": emotion,
-                    "resolved_emotion_preset": norm_emotion if norm_emotion in EMOTION_PARAMS else "neutral",
-                    "resolved_exaggeration": round(active_exaggeration, 3),
-                    "resolved_cfg_weight": round(active_cfg, 3),
-                    "speaker_similarity": round(similarity_score, 4) if similarity_score is not None else None,
-                    "word_error_rate": round(wer_score, 4) if wer_score is not None else None,
-                    "prosody_variance": round(prosody_var, 2) if prosody_var is not None else None,
-                    "latency_seconds": round(latency_s, 3),
-                    "text_length_chars": len(clean_text),
-                }
-                try:
-                    os.makedirs("logs", exist_ok=True)
-                    with open("logs/synthesis_runs.jsonl", "a", encoding="utf-8") as lf:
-                        lf.write(json.dumps(log_entry) + "\n")
-                except Exception as log_err:
-                    print(f"⚠️ Run logging notice: {log_err}")
+                # ── Run evaluations in background thread (non-blocking) ──────
+                # Audio response returns INSTANTLY instead of waiting 15-40s
+                # for ECAPA + Whisper + Prosody analysis on every request.
+                def _run_background_evals(
+                    _y_ref, _gen_np, _gen_sr, _wav_bytes, _clean_text,
+                    _emotion, _norm_emotion, _active_exag, _active_cfg, _latency_s
+                ):
+                    try:
+                        sim = calculate_voice_similarity(_y_ref, _gen_np, sr=_gen_sr)
+                        wer = word_error_rate(_clean_text, _wav_bytes)
+                        pvar = calculate_prosody_variance(_gen_np, sr=_gen_sr)
+
+                        log_entry = {
+                            "timestamp": datetime.now(timezone.utc).isoformat(),
+                            "emotion_requested": _emotion,
+                            "resolved_emotion_preset": _norm_emotion if _norm_emotion in EMOTION_PARAMS else "neutral",
+                            "resolved_exaggeration": round(_active_exag, 3),
+                            "resolved_cfg_weight": round(_active_cfg, 3),
+                            "speaker_similarity": round(sim, 4) if sim is not None else None,
+                            "word_error_rate": round(wer, 4) if wer is not None else None,
+                            "prosody_variance": round(pvar, 2) if pvar is not None else None,
+                            "latency_seconds": round(_latency_s, 3),
+                            "text_length_chars": len(_clean_text),
+                        }
+                        os.makedirs("logs", exist_ok=True)
+                        with open("logs/synthesis_runs.jsonl", "a", encoding="utf-8") as lf:
+                            lf.write(json.dumps(log_entry) + "\n")
+                        print(f"📊 Eval: sim={sim and f'{sim:.3f}'}, wer={wer and f'{wer:.3f}'}, pvar={pvar and f'{pvar:.1f}'}")
+                    except Exception as eval_err:
+                        print(f"⚠️ Background eval notice: {eval_err}")
+
+                eval_thread = threading.Thread(
+                    target=_run_background_evals,
+                    args=(y_ref.copy(), gen_np.copy(), gen_sr, wav_bytes, clean_text,
+                          emotion, norm_emotion, active_exaggeration, active_cfg, latency_s),
+                    daemon=True,
+                )
+                eval_thread.start()
 
                 headers = {
                     "X-Model": "chatterbox-tts",
                     "X-Sample-Rate": str(gen_sr),
-                    "X-Speaker-Similarity": f"{similarity_score:.4f}" if similarity_score is not None else "unavailable",
-                    "X-Word-Error-Rate": f"{wer_score:.4f}" if wer_score is not None else "unavailable",
-                    "X-Prosody-Variance": f"{prosody_var:.2f}" if prosody_var is not None else "unavailable",
+                    "X-Latency-Seconds": f"{latency_s:.2f}",
                     "X-Resolved-Emotion": norm_emotion,
                     "X-Resolved-CFG": f"{active_cfg:.2f}",
                     "X-Resolved-Exaggeration": f"{active_exaggeration:.2f}",
+                    "X-Eval-Status": "running-async",
                     "ngrok-skip-browser-warning": "true",
                 }
 

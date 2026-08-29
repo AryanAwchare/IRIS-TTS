@@ -45,6 +45,7 @@ try:
         voicelib_use_mock_tts: bool = Field(default=False, alias="VOICELIB_USE_MOCK_TTS")
         tts_engine: str = Field(default="gpt-sovits-v3", alias="TTS_ENGINE")
         colab_gpu_api_url: str = Field(default="http://localhost:8008", alias="COLAB_GPU_API_URL")
+        colab_register_secret: str = Field(default="voicelib-colab-dev-secret", alias="COLAB_REGISTER_SECRET")
         voice_similarity_threshold: float = Field(default=60.0, alias="VOICE_SIMILARITY_THRESHOLD")
         
         # Audio Limits & Formats
@@ -93,6 +94,7 @@ except ImportError:
         voicelib_use_mock_tts: bool = os.getenv("VOICELIB_USE_MOCK_TTS", "false").lower() in ("true", "1")
         tts_engine: str = os.getenv("TTS_ENGINE", "gpt-sovits-v3")
         colab_gpu_api_url: str = os.getenv("COLAB_GPU_API_URL", "http://localhost:8008")
+        colab_register_secret: str = os.getenv("COLAB_REGISTER_SECRET", "voicelib-colab-dev-secret")
         voice_similarity_threshold: float = float(os.getenv("VOICE_SIMILARITY_THRESHOLD", "60.0"))
 
         min_sample_duration_seconds: float = float(os.getenv("MIN_SAMPLE_DURATION_SECONDS", "3.0"))
