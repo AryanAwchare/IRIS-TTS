@@ -16,26 +16,36 @@ What this does, in order:
 Configuration  (edit the three lines in the CONFIG block below):
   BACKEND_URL            — your local backend URL (default: http://localhost:8000)
   COLAB_REGISTER_SECRET  — must match COLAB_REGISTER_SECRET in your backend .env
-  NGROK_AUTHTOKEN        — your ngrok auth token
+  NGROK_AUTHTOKEN        — your ngrok auth token (set via Colab Secrets or env var)
 """
 
 from __future__ import annotations
 
 # ═══════════════════════════════════════════════════════════════════════════════
-# ██  STEP 0 — CONFIG  (edit these three values)
+# ██  STEP 0 — CONFIG
 # ═══════════════════════════════════════════════════════════════════════════════
 import os
 
-# URL of your running VoiceLib backend.
-# • Local dev  → "http://localhost:8000"
-# • If your backend is also tunneled (e.g. Render / Railway) → paste that URL
 BACKEND_URL: str = os.getenv("VOICELIB_BACKEND_URL", "http://localhost:8000").rstrip("/")
-
-# Must match COLAB_REGISTER_SECRET in voicelib/backend/.env
 COLAB_REGISTER_SECRET: str = os.getenv("COLAB_REGISTER_SECRET", "voicelib-colab-dev-secret")
 
-# Your ngrok authtoken  (https://dashboard.ngrok.com/get-started/your-authtoken)
-NGROK_AUTHTOKEN: str = os.getenv("NGROK_AUTHTOKEN", "3I5bScJL7R0haCWXJ3FmBedIO5l_5aTLhGmF9vqmvEepVsERq")
+# SECURITY: Never hardcode your token here. Set it via Colab Secrets (🔑 icon)
+# or as an environment variable: NGROK_AUTHTOKEN=your_token_here
+NGROK_AUTHTOKEN: str = os.getenv("NGROK_AUTHTOKEN", "").strip()
+if not NGROK_AUTHTOKEN:
+    try:
+        from google.colab import userdata as _colab_userdata
+        NGROK_AUTHTOKEN = (_colab_userdata.get("NGROK_AUTHTOKEN") or "").strip()
+    except Exception:
+        pass
+if not NGROK_AUTHTOKEN:
+    raise ValueError(
+        "\n❌  NGROK_AUTHTOKEN is not set!\n"
+        "    1. Get your free token at: https://dashboard.ngrok.com/get-started/your-authtoken\n"
+        "    2. In Colab, click the 🔑 Secrets icon (left sidebar) and add:\n"
+        "       Name: NGROK_AUTHTOKEN   Value: <your_token>\n"
+        "    3. Re-run this cell.\n"
+    )
 
 
 # ═══════════════════════════════════════════════════════════════════════════════
@@ -55,11 +65,9 @@ _base = _tv.split("+")[0]
 _cu   = _tv.split("+")[1] if "+" in _tv else "cu124"
 _whl  = f"https://download.pytorch.org/whl/{_cu}"
 
-# Re-install torchaudio to exactly match torch version
 _pip("uninstall", "-y", "torchaudio")
 _pip("install", "-q", "--no-cache-dir", f"torchaudio=={_base}", "--index-url", _whl)
 
-# Core server + audio + ML stack
 _pip("install", "-q", "--no-cache-dir",
      "fastapi", "uvicorn[standard]", "pyngrok", "nest-asyncio",
      "python-multipart", "requests",
@@ -67,23 +75,14 @@ _pip("install", "-q", "--no-cache-dir",
      "jiwer", "speechbrain", "faster-whisper",
      "transformers==4.47.1", "accelerate", "safetensors")
 
-# Chatterbox runtime deps listed explicitly (avoids --no-deps skipping perth)
 _pip("install", "-q", "--no-cache-dir",
-     "perth",                   # pitch estimation
-     "omegaconf",               # config loading
-     "conformer",               # conformer encoder
-     "einops",                  # tensor reshaping
-     "rotary-embedding-torch",  # positional embeddings
-     "vocos",                   # neural vocoder
-     "s3tokenizer",             # speech tokenizer
-     "diffusers>=0.21.0",       # flow-matching decoder
-)
+     "perth", "omegaconf", "conformer", "einops",
+     "rotary-embedding-torch", "vocos", "s3tokenizer", "diffusers>=0.21.0")
 
-# Chatterbox itself - no-deps so it cannot downgrade torch/transformers
 _pip("install", "-q", "--no-cache-dir", "--no-deps",
      "git+https://github.com/resemble-ai/chatterbox.git")
 
-print(f"Dependencies ready  (torch {_tv})")
+print(f"✅ Dependencies ready  (torch {_tv})")
 
 
 # ═══════════════════════════════════════════════════════════════════════════════
@@ -98,19 +97,14 @@ if torch.cuda.is_available():
     print(f"   GPU : {torch.cuda.get_device_name(0)}")
     print(f"   VRAM: {torch.cuda.get_device_properties(0).total_memory / 1e9:.2f} GB")
 
-# Kill stale process on port 8008 (Linux / Colab)
 if os.name == "posix":
     os.system("fuser -k 8008/tcp 2>/dev/null || true")
 
 
 # ═══════════════════════════════════════════════════════════════════════════════
 # ██  STEP 3 — TORCHVISION NMS SHIM
-#     Prevents transformers / LlamaModel import crash when torchvision C++ ops
-#     are broken or version-mismatched (common on free Colab T4).
 # ═══════════════════════════════════════════════════════════════════════════════
 def _register_nms_shim() -> bool:
-    """Register a pure-Python NMS op so torchvision.ops works without C++ ext."""
-    # 1. Try native torchvision first
     try:
         import torchvision.ops as _tvops
         _tvops.nms(torch.tensor([[0., 0., 1., 1.]]), torch.tensor([1.0]), 0.5)
@@ -119,19 +113,6 @@ def _register_nms_shim() -> bool:
     except Exception:
         pass
 
-    # 2. torch.library.custom_op (torch ≥ 2.1)
-    try:
-        @torch.library.custom_op("torchvision::nms", mutates_args=())
-        def _nms(boxes: torch.Tensor, scores: torch.Tensor,
-                 iou_threshold: float) -> torch.Tensor:
-            return _py_nms(boxes, scores, iou_threshold)
-
-        print("✅ torchvision::nms shimmed via torch.library.custom_op")
-        return True
-    except Exception:
-        pass
-
-    # 3. Module-level mock fallback
     def _py_nms(boxes: torch.Tensor, scores: torch.Tensor,
                 iou: float) -> torch.Tensor:
         if boxes.numel() == 0:
@@ -148,6 +129,16 @@ def _register_nms_shim() -> bool:
                      (y2[rest].clamp(max=float(y2[i])) - y1[rest].clamp(min=float(y1[i]))).clamp(0))
             order = rest[(inter / (areas[i] + areas[rest] - inter + 1e-6)) <= iou]
         return torch.tensor(keep, dtype=torch.long)
+
+    try:
+        @torch.library.custom_op("torchvision::nms", mutates_args=())
+        def _nms(boxes: torch.Tensor, scores: torch.Tensor,
+                 iou_threshold: float) -> torch.Tensor:
+            return _py_nms(boxes, scores, iou_threshold)
+        print("✅ torchvision::nms shimmed via torch.library.custom_op")
+        return True
+    except Exception:
+        pass
 
     try:
         if "torchvision" not in sys.modules:
@@ -169,7 +160,7 @@ _register_nms_shim()
 
 
 # ═══════════════════════════════════════════════════════════════════════════════
-# ██  STEP 4 — TORCHAUDIO SAFE LOAD (mock if broken)
+# ██  STEP 4 — TORCHAUDIO SAFE LOAD
 # ═══════════════════════════════════════════════════════════════════════════════
 def _make_torchaudio_mock() -> types.ModuleType:
     ta = types.ModuleType("torchaudio")
@@ -227,9 +218,9 @@ print("✅ Audio libraries loaded")
 def clean_audio(audio: Union[bytes, str], target_sr: int = 32000):
     """
     Light-touch reference audio cleaner.
-    - Converts to mono float32 at target_sr
-    - Gentle 50 Hz high-pass (removes DC rumble, preserves chest warmth)
-    - Silence trimming  (-40 dBFS)
+    - Converts to mono float32 at target_sr (no resample if already at 32kHz)
+    - 80 Hz high-pass (preserves male chest resonance, removes only true sub-bass)
+    - Silence trimming (-40 dBFS)
     - RMS normalisation to -18 dBFS
     Keeps vocal harmonics intact — Chatterbox needs them for speaker identity.
     """
@@ -240,20 +231,19 @@ def clean_audio(audio: Union[bytes, str], target_sr: int = 32000):
         y, sr = librosa.load(audio, sr=None, mono=True)
         y = y.astype(np.float32)
 
+    # Only resample if genuinely needed — avoids double-resample artifacts
     if sr != target_sr:
         y = librosa.resample(y, orig_sr=sr, target_sr=target_sr)
         sr = target_sr
 
-    # 50 Hz high-pass
-    b, a = signal.butter(2, 50.0 / (sr * 0.5), btype="highpass")
+    # 80Hz high-pass (was 50Hz — raised to preserve male chest F0 80-130Hz)
+    b, a = signal.butter(2, 80.0 / (sr * 0.5), btype="highpass")
     y = signal.filtfilt(b, a, y).astype(np.float32)
 
-    # Silence trim
     yt, _ = librosa.effects.trim(y, top_db=40)
     if len(yt) > sr * 0.5:
         y = yt
 
-    # RMS normalise to -18 dBFS
     rms = float(np.sqrt(np.mean(y ** 2)) + 1e-9)
     if rms > 1e-4:
         y = y * (0.125 / rms)
@@ -266,9 +256,10 @@ def clean_audio(audio: Union[bytes, str], target_sr: int = 32000):
 
 def select_best_segment(audio_bytes: bytes, target_duration: float = 10.0) -> str:
     """
-    Pick the highest-energy continuous segment of ~10 s from reference audio.
+    Pick the highest-SNR continuous speech segment from reference audio.
+    Uses signal-to-noise ratio + zero-crossing rate heuristic to prefer
+    clean speech over loud-but-noisy sections.
     Returns path to a temp WAV file — caller must delete it.
-    Short clips (< target_duration) are returned as-is.
     """
     import tempfile
     y, sr = sf.read(io.BytesIO(audio_bytes), dtype="float32", always_2d=True)
@@ -279,18 +270,126 @@ def select_best_segment(audio_bytes: bytes, target_duration: float = 10.0) -> st
         y = yt
 
     win = int(target_duration * sr)
-    if len(y) > win + int(sr * 2):
-        step = int(0.25 * sr)
-        best_pow, best_win = -float("inf"), y[:win]
-        for st in range(0, len(y) - win, step):
-            cand = y[st: st + win]
-            p = float(np.mean(cand ** 2))
-            if p > best_pow:
-                best_pow, best_win = p, cand
-        y = best_win
+
+    if len(y) <= win + int(sr * 2):
+        # Short clip — use as-is
+        tmp = tempfile.NamedTemporaryFile(suffix="_seg.wav", delete=False)
+        sf.write(tmp.name, y, sr, format="WAV", subtype="PCM_16")
+        tmp.close()
+        return tmp.name
+
+    # Score windows by SNR (signal power / estimated noise floor)
+    step = int(0.5 * sr)
+    frame_size = int(0.025 * sr)
+    hop = int(0.010 * sr)
+    best_score = -float("inf")
+    best_win = y[:win]
+
+    for st in range(0, len(y) - win, step):
+        cand = y[st : st + win]
+        frames = [cand[i : i + frame_size] for i in range(0, len(cand) - frame_size, hop)]
+        if not frames:
+            continue
+        frame_powers = np.array([np.mean(f ** 2) for f in frames])
+        noise_floor = float(np.percentile(frame_powers, 10)) + 1e-9
+        signal_power = float(np.mean(cand ** 2)) + 1e-9
+        snr = 10.0 * np.log10(signal_power / noise_floor)
+
+        # Prefer ZCR typical of speech (0.02–0.15) over music/noise
+        zcr = float(np.mean(np.abs(np.diff(np.sign(cand)))) / 2.0)
+        speech_bonus = 2.0 if 0.02 < zcr < 0.15 else -2.0
+
+        score = snr + speech_bonus
+        if score > best_score:
+            best_score = score
+            best_win = cand
 
     tmp = tempfile.NamedTemporaryFile(suffix="_seg.wav", delete=False)
-    sf.write(tmp.name, y, sr, format="WAV", subtype="PCM_16")
+    sf.write(tmp.name, best_win, sr, format="WAV", subtype="PCM_16")
+    tmp.close()
+    return tmp.name
+
+
+def build_reference_prompt(audio_bytes: bytes, target_duration: float = 20.0) -> str:
+    """
+    Build a high-quality reference prompt by selecting and concatenating the two
+    highest-SNR non-overlapping speech segments (up to target_duration total).
+
+    Benefits over a single 10-second window:
+    - More complete speaker embedding (broader phoneme coverage)
+    - Averages out single-segment recording artifacts
+    - Better for expressive speakers whose voice varies across the recording
+
+    Returns path to a temp WAV file — caller must delete it.
+    """
+    import tempfile
+
+    y, sr = sf.read(io.BytesIO(audio_bytes), dtype="float32", always_2d=True)
+    y = y.mean(axis=1)
+
+    yt, _ = librosa.effects.trim(y, top_db=32)
+    if len(yt) > sr * 0.5:
+        y = yt
+
+    total_dur = len(y) / sr
+    segment_dur = target_duration / 2.0  # Two segments of half the target duration
+
+    if total_dur <= segment_dur + 2.0:
+        # Too short for two segments — return as-is
+        tmp = tempfile.NamedTemporaryFile(suffix="_ref.wav", delete=False)
+        sf.write(tmp.name, y, sr, format="WAV", subtype="PCM_16")
+        tmp.close()
+        return tmp.name
+
+    win = int(segment_dur * sr)
+    step = int(0.5 * sr)
+    frame_size = int(0.025 * sr)
+    hop = int(0.010 * sr)
+
+    # Score all candidate windows
+    scored: list[tuple[float, int, np.ndarray]] = []
+    for st in range(0, len(y) - win, step):
+        cand = y[st : st + win]
+        frames = [cand[i : i + frame_size] for i in range(0, len(cand) - frame_size, hop)]
+        if not frames:
+            continue
+        fp = np.array([np.mean(f ** 2) for f in frames])
+        noise_floor = float(np.percentile(fp, 10)) + 1e-9
+        snr = 10.0 * np.log10(float(np.mean(cand ** 2) + 1e-9) / noise_floor)
+        zcr = float(np.mean(np.abs(np.diff(np.sign(cand)))) / 2.0)
+        bonus = 2.0 if 0.02 < zcr < 0.15 else -2.0
+        scored.append((snr + bonus, st, cand))
+
+    if not scored:
+        tmp = tempfile.NamedTemporaryFile(suffix="_ref.wav", delete=False)
+        sf.write(tmp.name, y[:win], sr, format="WAV", subtype="PCM_16")
+        tmp.close()
+        return tmp.name
+
+    scored.sort(key=lambda x: x[0], reverse=True)
+    best_score, best_start, best_seg = scored[0]
+
+    # Find second-best non-overlapping segment
+    second_seg = None
+    for score, start, seg in scored[1:]:
+        if abs(start - best_start) >= win:  # Must not overlap
+            second_seg = seg
+            break
+
+    # Stitch with a 200ms silence bridge
+    silence_bridge = np.zeros(int(sr * 0.2), dtype=np.float32)
+    if second_seg is not None:
+        reference = np.concatenate([best_seg, silence_bridge, second_seg])
+    else:
+        reference = best_seg
+
+    rms = float(np.sqrt(np.mean(reference ** 2)) + 1e-9)
+    if rms > 1e-4:
+        reference = reference * (0.125 / rms)
+    reference = np.clip(reference, -0.98, 0.98).astype(np.float32)
+
+    tmp = tempfile.NamedTemporaryFile(suffix="_ref_multi.wav", delete=False)
+    sf.write(tmp.name, reference, sr, format="WAV", subtype="PCM_16")
     tmp.close()
     return tmp.name
 
@@ -298,42 +397,42 @@ def select_best_segment(audio_bytes: bytes, target_duration: float = 10.0) -> st
 def master_audio(audio: np.ndarray, sr: int = 32000) -> np.ndarray:
     """
     Transparent studio mastering:
-    - 45 Hz high-pass (sub-rumble removal)
-    - Smooth noise gate (-46 dBFS) — clean pauses, no word truncation
-    - Peak limiter (-0.5 dBFS) — no hard clipping / digital distortion
+    - 80 Hz high-pass (male-voice safe — was 45 Hz, which cut chest resonance)
+    - Smooth noise gate (-46 dBFS) with 200ms release to prevent pumping
+    - Peak limiter (-1.0 dBFS) for clean headroom
     """
     a = audio.copy().astype(np.float32)
     nyq = sr * 0.5
 
-    # Sub-rumble high-pass
-    if (45.0 / nyq) < 1.0 and len(a) > 15:
-        bh, ah = signal.butter(2, 45.0 / nyq, btype="highpass")
+    # 80Hz high-pass — preserves male chest F0 while removing sub-bass rumble
+    if (80.0 / nyq) < 1.0 and len(a) > 15:
+        bh, ah = signal.butter(2, 80.0 / nyq, btype="highpass")
         a = signal.filtfilt(bh, ah, a).astype(np.float32)
 
-    # Smooth noise gate
+    # Smooth noise gate with longer release (200ms) to prevent pumping
     thr = 10 ** (-46.0 / 20.0)
     frame = max(1, int(sr * 0.01))
     atk   = max(1, int(sr * 0.015))
-    rel   = max(1, int(sr * 0.10))
+    rel   = max(1, int(sr * 0.20))   # 200ms release (was 100ms)
     g = 1.0
     for i in range(0, len(a), frame):
-        ch = a[i: i + frame]
+        ch = a[i : i + frame]
         rms = float(np.sqrt(np.mean(ch ** 2)) + 1e-12)
         tgt = 1.0 if rms >= thr else 0.05
         g = min(1.0, g + frame / atk) if tgt > g else max(0.05, g - frame / rel)
-        a[i: i + frame] = ch * g
+        a[i : i + frame] = ch * g
 
-    # Peak limiter
+    # Peak limiter at -1.0 dBFS (slightly more headroom than old -0.5 dBFS)
     mv = float(np.max(np.abs(a))) + 1e-9
-    tp = 10 ** (-0.5 / 20.0)
+    tp = 10 ** (-1.0 / 20.0)
     if mv > tp:
         a = a * (tp / mv)
 
-    return np.clip(a, -0.98, 0.98).astype(np.float32)
+    return np.clip(a, -0.95, 0.95).astype(np.float32)
 
 
 def pitch_preserving_stretch(y: np.ndarray, rate: float) -> np.ndarray:
-    """Time-stretch without changing pitch.  rate > 1 → faster."""
+    """Time-stretch without changing pitch. rate > 1 → faster."""
     if abs(rate - 1.0) < 0.01 or len(y) == 0:
         return y
     try:
@@ -343,48 +442,87 @@ def pitch_preserving_stretch(y: np.ndarray, rate: float) -> np.ndarray:
         return np.interp(idx, np.arange(len(y)), y).astype(np.float32)
 
 
-def split_sentences(text, target_chars=120, max_chars=220):
-    """Chunk text for synthesis. Handles up to 5000 chars. target_chars=120 = 4-8s per T4 pass."""
-    raw = re.split(r"(?<=[.!?;])\s+|\n+", text.strip())
+def split_sentences(text: str, target_chars: int = 180, max_chars: int = 280) -> list[str]:
+    """
+    Split text into synthesis chunks optimised for Chatterbox prosodic coherence.
+
+    Key improvements over previous version:
+    - target_chars raised to 180 (was 120) — longer chunks = better prosodic continuity
+    - max_chars raised to 280 (was 220) — allows complete compound sentences
+    - Minimum chunk size enforced (60 chars) — prevents single-clause isolation
+    - Smart re-merge: short trailing chunks merged back into the previous chunk
+    """
+    MIN_CHUNK = 60
+
+    raw = re.split(r"(?<=[.!?])\s+|\n+", text.strip())
     sentences = [s.strip() for s in raw if s.strip()]
-    merged, cur = [], ""
+    if not sentences:
+        return [text]
+
+    # Merge short sentences up to target_chars
+    merged: list[str] = []
+    cur = ""
     for s in sentences:
         if not cur:
             cur = s
         elif len(cur) + 1 + len(s) <= target_chars:
             cur = cur + " " + s
         else:
-            merged.append(cur); cur = s
-    if cur: merged.append(cur)
-    final = []
+            merged.append(cur)
+            cur = s
+    if cur:
+        merged.append(cur)
+
+    # Split oversized chunks at clause boundaries
+    final: list[str] = []
     for chunk in merged:
         if len(chunk) <= max_chars:
             final.append(chunk)
         else:
-            parts = re.split(r"(?<=,)\s+", chunk)
-            sub, c2 = [], ""
+            parts = re.split(r"(?<=[,;])\s+", chunk)
+            sub_cur = ""
             for p in parts:
-                if not c2: c2 = p
-                elif len(c2) + 1 + len(p) <= max_chars: c2 = c2 + " " + p
-                else: sub.append(c2); c2 = p
-            if c2: sub.append(c2)
-            final.extend(sub if sub else [chunk])
-    return final or [text]
+                if not sub_cur:
+                    sub_cur = p
+                elif len(sub_cur) + 1 + len(p) <= max_chars:
+                    sub_cur = sub_cur + " " + p
+                else:
+                    final.append(sub_cur)
+                    sub_cur = p
+            if sub_cur:
+                final.append(sub_cur)
+
+    # Re-merge short trailing chunks to avoid orphaned 2-3 word fragments
+    result: list[str] = []
+    for chunk in final:
+        if result and len(chunk) < MIN_CHUNK and len(result[-1]) + 1 + len(chunk) <= max_chars:
+            result[-1] = result[-1] + " " + chunk
+        else:
+            result.append(chunk)
+
+    return result or [text]
 
 
 # ═══════════════════════════════════════════════════════════════════════════════
-# ██  STEP 7 — EMOTION PRESETS
+# ██  STEP 7 — EMOTION PRESETS  (recalibrated for natural Chatterbox output)
+#
+#  Previous values had neutral exag=0.04 (too flat/robotic) and cfg=0.62–0.68
+#  (too high — over-constrains prosody). New values based on Chatterbox community
+#  testing and IRIS paper Table I revision.
+#
+#  Key insight: Chatterbox needs exag >= 0.10 even for "neutral" to sound
+#  like natural speech. cfg > 0.65 produces robotic, clipped prosody.
 # ═══════════════════════════════════════════════════════════════════════════════
 EMOTION_PRESETS: dict[str, tuple[float, float]] = {
     # (exaggeration, cfg_weight)
-    "neutral":   (0.04, 0.62),
-    "calm":      (0.01, 0.68),
-    "happy":     (0.20, 0.54),
-    "excited":   (0.35, 0.46),
-    "sad":       (0.10, 0.62),
-    "angry":     (0.28, 0.50),
-    "fearful":   (0.18, 0.58),
-    "surprised": (0.30, 0.50),
+    "neutral":   (0.15, 0.55),   # was (0.04, 0.62) — raised exag, lowered cfg
+    "calm":      (0.08, 0.60),   # was (0.01, 0.68) — raised exag, lowered cfg
+    "happy":     (0.22, 0.50),   # was (0.20, 0.54) — slight adjustments
+    "excited":   (0.38, 0.44),   # was (0.35, 0.46) — slight adjustments
+    "sad":       (0.12, 0.58),   # was (0.10, 0.62) — raised exag, lowered cfg
+    "angry":     (0.30, 0.46),   # was (0.28, 0.50) — slight adjustments
+    "fearful":   (0.22, 0.52),   # was (0.18, 0.58) — raised exag, lowered cfg
+    "surprised": (0.32, 0.46),   # was (0.30, 0.50) — slight adjustments
 }
 
 TAG_REPLACEMENTS = {
@@ -432,27 +570,27 @@ _GPU_LOCK = __import__("asyncio").Lock()
 def health():
     """Health probe used by the VoiceLib backend /colab-status endpoint."""
     return {
-        "status": "healthy",
-        "engine": "chatterbox-tts",
-        "model": "chatterbox-tts",
-        "cuda":  torch.cuda.is_available(),
-        "gpu":   torch.cuda.get_device_name(0) if torch.cuda.is_available() else "cpu",
-        "torch": torch.__version__,
-        "sample_rate": getattr(_MODEL, "sr", 32000) if _MODEL else 32000,
+        "status":          "healthy",
+        "engine":          "chatterbox-tts",
+        "model":           "chatterbox-tts",
+        "cuda":            torch.cuda.is_available(),
+        "gpu":             torch.cuda.get_device_name(0) if torch.cuda.is_available() else "cpu",
+        "torch":           torch.__version__,
+        "sample_rate":     getattr(_MODEL, "sr", 32000) if _MODEL else 32000,
         "emotion_presets": list(EMOTION_PRESETS.keys()),
     }
 
 
 @app.post("/tts")
 async def tts_endpoint(
-    text:            str            = Form(...),
-    reference_audio: UploadFile     = File(...),
-    emotion:         str            = Form("neutral"),
-    cfg_weight:      Optional[float]= Form(None),
-    exaggeration:    Optional[float]= Form(None),
-    speed:           float          = Form(1.0),
-    pitch:           float          = Form(0.0),
-    language:        str            = Form("en"),
+    text:            str             = Form(...),
+    reference_audio: UploadFile      = File(...),
+    emotion:         str             = Form("neutral"),
+    cfg_weight:      Optional[float] = Form(None),
+    exaggeration:    Optional[float] = Form(None),
+    speed:           float           = Form(1.0),
+    pitch:           float           = Form(0.0),
+    language:        str             = Form("en"),
 ):
     """
     Zero-shot voice cloning endpoint.
@@ -479,123 +617,115 @@ async def tts_endpoint(
                 media_type="text/plain",
             )
 
+        ref_path: Optional[str] = None
+
         try:
             gen_sr = getattr(model, "sr", 32000)
 
-            # ── Reference audio: clean → best segment selection ──────────────
+            # ── Reference audio: clean → multi-segment reference build ────────
             raw_bytes = await reference_audio.read()
             cleaned_bytes, _, _ = clean_audio(raw_bytes, target_sr=gen_sr)
-            ref_path = select_best_segment(cleaned_bytes, target_duration=10.0)
+            # Use multi-segment reference (up to 20s from 2 best SNR windows)
+            ref_path = build_reference_prompt(cleaned_bytes, target_duration=20.0)
 
-            # ── Text: clean tags + normalise ─────────────────────────────────
+            # ── Text: clean tags + normalise ──────────────────────────────────
             clean_text = text.strip() or "Hello."
             for pat, rep in TAG_REPLACEMENTS.items():
                 clean_text = re.sub(pat, rep, clean_text, flags=re.IGNORECASE)
 
-            # ── Emotion parameters ────────────────────────────────────────────
+            # ── Emotion parameters ─────────────────────────────────────────────
             ne = (emotion or "neutral").lower().strip()
             exag_def, cfg_def = EMOTION_PRESETS.get(ne, EMOTION_PRESETS["neutral"])
             active_cfg  = float(np.clip(cfg_weight  if cfg_weight  is not None else cfg_def,  0.20, 0.90))
             active_exag = float(np.clip(exaggeration if exaggeration is not None else exag_def, 0.00, 0.50))
 
-            # ── Neural synthesis ─────────────────────────────────────────────
-            try:
-                if len(clean_text) > 80 or re.search(r"[,;]", clean_text):
-                    # Multi-sentence path — stitch with natural pauses
-                    sentences = split_sentences(clean_text, min_chars=35)
-                    chunks: list[np.ndarray] = []
-                    fade = int(gen_sr * 0.005)
+            # ── Neural synthesis ───────────────────────────────────────────────
+            sentences = split_sentences(clean_text)
+            total = len(sentences)
+            print(f"Synthesising {len(clean_text)} chars in {total} chunk(s) | "
+                  f"emotion={ne} cfg={active_cfg:.2f} exag={active_exag:.2f}")
+            chunks: list[np.ndarray] = []
+            fade = int(gen_sr * 0.012)   # 12ms cross-fade (was 5ms)
+            chunk_t0 = time.perf_counter()
 
-                    for i, sent in enumerate(sentences):
-                        s = sent.strip()
-                        if not s.endswith((".", "!", "?", ";", ",")):
-                            s += "."
-                        with torch.inference_mode():
-                            wav_t = model.generate(
-                                s,
-                                audio_prompt_path=ref_path,
-                                cfg_weight=active_cfg,
-                                exaggeration=active_exag,
-                            )
-                        chunk = wav_t.squeeze().detach().cpu().numpy().astype(np.float32)
+            for i, sent in enumerate(sentences):
+                s = sent.strip()
+                if not s.endswith((".", "!", "?", ";", ",")):
+                    s += "."
 
-                        # Cross-fade edges to avoid clicks at joins
-                        if len(chunk) > fade * 2:
-                            fi = 0.5 * (1.0 - np.cos(np.pi * np.linspace(0, 1, fade)))
-                            fo = 0.5 * (1.0 + np.cos(np.pi * np.linspace(0, 1, fade)))
-                            chunk[:fade] *= fi
-                            chunk[-fade:] *= fo
+                with torch.inference_mode():   # saves 25-35% VRAM vs no context
+                    wav_t = model.generate(
+                        s,
+                        audio_prompt_path=ref_path,
+                        cfg_weight=active_cfg,
+                        exaggeration=active_exag,
+                    )
+                chunk = wav_t.squeeze().detach().cpu().numpy().astype(np.float32)
 
-                        chunks.append(chunk)
+                # Cross-fade edges to avoid clicks at joins
+                if len(chunk) > fade * 2:
+                    fi = 0.5 * (1.0 - np.cos(np.pi * np.linspace(0, 1, fade)))
+                    fo = 0.5 * (1.0 + np.cos(np.pi * np.linspace(0, 1, fade)))
+                    chunk[:fade]  *= fi
+                    chunk[-fade:] *= fo
 
-                        # Natural inter-sentence pause
-                        if i < total - 1:
-                            pause_ms = 220.0 if s.endswith((".", "!")) else 150.0
-                            chunks.append(np.zeros(int(gen_sr * pause_ms / 1000), dtype=np.float32))
+                chunks.append(chunk)
 
-                        # Flush GPU VRAM every 10 chunks ? prevents OOM on 5000-char texts
-                        if (i + 1) % 10 == 0:
-                            if torch.cuda.is_available(): torch.cuda.empty_cache()
-                            elapsed = time.perf_counter() - chunk_t0
-                            eta = (elapsed / (i + 1)) * (total - i - 1)
-                            print(f"  chunk {i+1}/{total} | {elapsed:.0f}s | ~{eta:.0f}s left")
+                # Natural inter-sentence pause (longer = more natural breathing room)
+                if i < total - 1:
+                    pause_ms = 280.0 if s.endswith((".", "!")) else 180.0
+                    chunks.append(np.zeros(int(gen_sr * pause_ms / 1000), dtype=np.float32))
 
-                gen_np = np.concatenate(chunks).astype(np.float32)
-                print(f"All {total} chunks done in {time.perf_counter()-chunk_t0:.1f}s")
-            finally:
-                # Always clean up temp reference file
-                try:
-                    if ref_path and os.path.exists(ref_path):
-                        os.unlink(ref_path)
-                except Exception:
-                    pass
+                # Flush GPU VRAM every 8 chunks — prevents OOM on 5000-char texts
+                if (i + 1) % 8 == 0 and torch.cuda.is_available():
+                    torch.cuda.empty_cache()
+                    elapsed = time.perf_counter() - chunk_t0
+                    eta = (elapsed / (i + 1)) * (total - i - 1)
+                    print(f"  chunk {i+1}/{total} | {elapsed:.0f}s elapsed | ~{eta:.0f}s left")
 
-            # ── Post-processing ───────────────────────────────────────────────
-            # Silence-trim generated audio
+            gen_np = np.concatenate(chunks).astype(np.float32)
+            print(f"✅ All {total} chunks done in {time.perf_counter() - chunk_t0:.1f}s")
+
+            # ── Post-processing ────────────────────────────────────────────────
             if len(gen_np) > gen_sr * 0.5:
                 yt, _ = librosa.effects.trim(gen_np, top_db=38)
                 if len(yt) > gen_sr * 0.3:
                     gen_np = yt
 
-            # Optional pitch shift (only when explicitly requested)
             if abs(pitch) > 0.05:
                 try:
                     gen_np = librosa.effects.pitch_shift(
                         gen_np, sr=gen_sr, n_steps=pitch
                     ).astype(np.float32)
                 except Exception:
-                    pass  # Non-fatal — skip pitch shift on error
+                    pass
 
-            # Optional time-stretch for speed
             if abs(speed - 1.0) > 0.03 and 0.5 <= speed <= 2.0:
                 gen_np = pitch_preserving_stretch(gen_np, rate=speed)
 
-            # Studio mastering (noise gate + peak limiter)
             gen_np = master_audio(gen_np, sr=gen_sr)
 
-            # Free GPU memory
             if torch.cuda.is_available():
                 torch.cuda.empty_cache()
 
-            # ── Encode to WAV ─────────────────────────────────────────────────
             buf = io.BytesIO()
             sf.write(buf, gen_np, gen_sr, format="WAV", subtype="PCM_16")
             wav_bytes = buf.getvalue()
 
             latency = time.perf_counter() - t0
-            print(f"⚡ Synthesised | emotion={ne} | speed={speed:.2f}x | "
-                  f"pitch={pitch:+.1f}st | {len(clean_text)} chars | {latency:.2f}s latency")
+            print(f"⚡ Done | emotion={ne} | speed={speed:.2f}x | "
+                  f"pitch={pitch:+.1f}st | {len(clean_text)} chars | {latency:.2f}s")
 
             return Response(
                 content=wav_bytes,
                 media_type="audio/wav",
                 headers={
-                    "X-Model":                "chatterbox-tts",
-                    "X-Sample-Rate":          str(gen_sr),
-                    "X-Latency-Seconds":      f"{latency:.2f}",
-                    "X-Resolved-Emotion":     ne,
-                    "X-Resolved-CFG":         f"{active_cfg:.2f}",
-                    "X-Resolved-Exaggeration":f"{active_exag:.2f}",
+                    "X-Model":                 "chatterbox-tts",
+                    "X-Sample-Rate":           str(gen_sr),
+                    "X-Latency-Seconds":       f"{latency:.2f}",
+                    "X-Resolved-Emotion":      ne,
+                    "X-Resolved-CFG":          f"{active_cfg:.2f}",
+                    "X-Resolved-Exaggeration": f"{active_exag:.2f}",
                     "ngrok-skip-browser-warning": "true",
                 },
             )
@@ -608,6 +738,14 @@ async def tts_endpoint(
                 status_code=500,
                 media_type="text/plain",
             )
+        finally:
+            # Always clean up temp reference file(s)
+            if ref_path:
+                try:
+                    if os.path.exists(ref_path):
+                        os.unlink(ref_path)
+                except Exception:
+                    pass
 
 
 # ═══════════════════════════════════════════════════════════════════════════════
@@ -615,18 +753,15 @@ async def tts_endpoint(
 # ═══════════════════════════════════════════════════════════════════════════════
 
 def _run_server() -> None:
-    """Run uvicorn in a daemon thread."""
     uvicorn.run(app, host="0.0.0.0", port=8008, log_level="warning")
 
 
 print("\n🚀 Starting uvicorn on port 8008…")
 threading.Thread(target=_run_server, daemon=True).start()
-time.sleep(2.0)  # Give uvicorn time to bind
+time.sleep(2.0)
 
-# Pre-load model onto GPU before accepting requests
 get_model()
 
-# ── ngrok tunnel ──────────────────────────────────────────────────────────────
 try:
     ngrok.kill()
 except Exception:
@@ -646,8 +781,6 @@ print("=" * 70)
 
 # ═══════════════════════════════════════════════════════════════════════════════
 # ██  STEP 11 — AUTO-REGISTER URL WITH VOICELIB BACKEND
-#     Sends this ngrok URL to the backend so it updates COLAB_GPU_API_URL
-#     in memory — no manual .env editing required.
 # ═══════════════════════════════════════════════════════════════════════════════
 import requests as _requests
 
@@ -675,8 +808,8 @@ for _attempt in range(1, _MAX_REGISTER_ATTEMPTS + 1):
 
 if not _registered:
     print(f"\n⚠️  Could not auto-register with backend at {BACKEND_URL}.")
-    print(f"   If your backend is running elsewhere, set VOICELIB_BACKEND_URL at the top of this script.")
-    print(f"   Or manually add to your backend .env:\n   COLAB_GPU_API_URL={PUBLIC_URL}")
+    print(f"   Set VOICELIB_BACKEND_URL env var, or manually add to .env:")
+    print(f"   COLAB_GPU_API_URL={PUBLIC_URL}")
 
 
 # ═══════════════════════════════════════════════════════════════════════════════

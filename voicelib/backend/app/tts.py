@@ -49,8 +49,15 @@ class _LRUCache:
             self._cache.clear()
 
 
-# Single-layer LRU cache mapping voice_id -> voice_state
+# FIX: cache is now keyed by "{voice_id}::{engine_id}" to prevent cross-engine
+# state corruption (previously keyed by voice_id only — GPT-SoVITS state could
+# be returned to Pocket TTS engine causing undefined behavior).
 _cache = _LRUCache(max_size=50)
+
+
+def _cache_key(voice_id: str, engine_id: str) -> str:
+    """Compound cache key that prevents cross-engine state collisions."""
+    return f"{voice_id}::{engine_id}"
 
 
 def load_model() -> None:
@@ -69,9 +76,11 @@ def get_sample_rate(engine_id: Optional[str] = None) -> int:
     return get_engine(eid).sample_rate
 
 
-def get_cached_voice_state(voice_id: str) -> Any | None:
+def get_cached_voice_state(voice_id: str, engine_id: Optional[str] = None) -> Any | None:
     """Retrieve cached voice state without re-derivation."""
-    return _cache.get(voice_id)
+    settings = get_settings()
+    eid = engine_id or settings.tts_engine
+    return _cache.get(_cache_key(voice_id, eid))
 
 
 def derive_voice_state(
@@ -84,16 +93,19 @@ def derive_voice_state(
     eid = engine_id or settings.tts_engine
     engine = get_engine(eid)
     state = engine.derive_voice_state(audio_source, voice_id)
-    _cache.put(voice_id, state)
+    _cache.put(_cache_key(voice_id, eid), state)
     return state
 
 
 def invalidate_cache(voice_id: str, engine_id: Optional[str] = None) -> None:
-    """Invalidate voice state in memory."""
-    _cache.remove(voice_id)
+    """Invalidate voice state for a specific engine (or default engine)."""
     settings = get_settings()
     eid = engine_id or settings.tts_engine
-    get_engine(eid).invalidate_cache(voice_id)
+    _cache.remove(_cache_key(voice_id, eid))
+    try:
+        get_engine(eid).invalidate_cache(voice_id)
+    except Exception:
+        pass
 
 
 # Alias used by voices_router — keep both names in sync

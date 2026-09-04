@@ -10,6 +10,9 @@ export const generateApi = {
   similarity: (generationId) =>
     client.get(`/generations/${generationId}/similarity`).then((r) => r.data),
 
+  getEval: (generationId) =>
+    client.get(`/generations/${generationId}/eval`).then((r) => r.data),
+
   getColabStatus: () =>
     client.get('/colab-status').then((r) => r.data),
 

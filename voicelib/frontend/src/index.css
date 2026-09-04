@@ -240,4 +240,40 @@
     pointer-events: none;
     border-radius: inherit;
   }
+
+  /* ── Cyberpunk 2077 Anime-Tech UI Primitives ─────────────────────────── */
+  .cyber-clip {
+    clip-path: polygon(0 0, calc(100% - 18px) 0, 100% 18px, 100% 100%, 18px 100%, 0 calc(100% - 18px));
+  }
+  .cyber-clip-top {
+    clip-path: polygon(0 0, calc(100% - 14px) 0, 100% 14px, 100% 100%, 0 100%);
+  }
+  .cyber-clip-btn {
+    clip-path: polygon(0 0, calc(100% - 12px) 0, 100% 12px, 100% 100%, 12px 100%, 0 calc(100% - 12px));
+    transition: all 0.2s cubic-bezier(0.16, 1, 0.3, 1);
+  }
+  .cyber-hazard-tape {
+    background: repeating-linear-gradient(
+      -45deg,
+      #FCEE0A,
+      #FCEE0A 8px,
+      #08090C 8px,
+      #08090C 16px
+    );
+  }
+  .cyber-grid-pattern {
+    background-image:
+      linear-gradient(to right, rgba(0, 240, 255, 0.08) 1px, transparent 1px),
+      linear-gradient(to bottom, rgba(0, 240, 255, 0.08) 1px, transparent 1px);
+    background-size: 24px 24px;
+  }
+  .neon-text-cyan {
+    text-shadow: 0 0 12px rgba(0, 240, 255, 0.6);
+  }
+  .neon-text-yellow {
+    text-shadow: 0 0 12px rgba(252, 238, 10, 0.6);
+  }
+  .neon-text-pink {
+    text-shadow: 0 0 12px rgba(255, 0, 60, 0.6);
+  }
 }

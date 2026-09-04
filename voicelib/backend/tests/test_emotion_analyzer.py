@@ -100,3 +100,74 @@ def test_short_text_edge_case():
     res = analyze_text_sentiment_and_emotion(text)
     assert res.emotion == "neutral"
     assert res.intensity <= 0.20
+
+
+def test_fearful_emotion():
+    text = "I am terrified and anxious about this panic situation!"
+    res = analyze_text_sentiment_and_emotion(text)
+    assert res.emotion == "fearful"
+    assert res.intensity >= 0.40
+
+    params = compute_modulated_synthesis_parameters(text, requested_emotion="auto")
+    assert params["resolved_emotion"] == "fearful"
+    assert params.emotion == "fearful"
+
+
+def test_disgusted_emotion():
+    text = "That food was revolting and nauseating, completely gross!"
+    res = analyze_text_sentiment_and_emotion(text)
+    assert res.emotion == "disgusted"
+    assert res.intensity >= 0.40
+
+    params = compute_modulated_synthesis_parameters(text, requested_emotion="auto")
+    assert params["resolved_emotion"] == "disgusted"
+
+
+def test_user_intensity_override():
+    # Ambiguous sentence 'I am fine'
+    text = "I am fine."
+    # User manually specifies full 0.90 intensity
+    params = compute_modulated_synthesis_parameters(
+        text,
+        requested_emotion="happy",
+        user_intensity=0.90
+    )
+    assert params["intensity"] == 0.90
+    assert params["resolved_emotion"] == "happy"
+    assert params["exaggeration"] >= 0.25
+
+
+def test_lexical_intensity_boosters():
+    text_plain = "I am happy to see you."
+    text_boosted = "I am SO INCREDIBLY and EXTREMELY happy to see you!!!"
+    res_plain = analyze_text_sentiment_and_emotion(text_plain)
+    res_boosted = analyze_text_sentiment_and_emotion(text_boosted)
+    assert res_boosted.intensity > res_plain.intensity
+
+
+def test_emotion_profile_interface():
+    text = "This is a great achievement."
+    profile = compute_modulated_synthesis_parameters(text)
+    # Both attribute and dict access work seamlessly
+    assert hasattr(profile, "emotion")
+    assert hasattr(profile, "intensity")
+    assert "cfg_weight" in profile
+    assert profile["resolved_emotion"] == profile.emotion
+    d = profile.to_dict()
+    assert isinstance(d, dict)
+    assert "cfg_weight" in d
+
+
+def run_all_tests():
+    funcs = [v for k, v in globals().items() if k.startswith("test_") and callable(v)]
+    print(f"Running {len(funcs)} emotion analyzer tests...")
+    for fn in funcs:
+        fn()
+        print(f"  {fn.__name__}: PASS")
+    print(f"All {len(funcs)} emotion analyzer tests PASSED!")
+
+
+if __name__ == "__main__":
+    run_all_tests()
+
+

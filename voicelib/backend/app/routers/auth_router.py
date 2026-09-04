@@ -1,8 +1,12 @@
 """
 Auth router — user registration and login.
+
+FIX: Login endpoint uses constant-time password verification even for
+     non-existent email addresses (timing defense against user enumeration).
 """
 from __future__ import annotations
 
+import threading
 from typing import Annotated
 
 from fastapi import APIRouter, Depends, HTTPException, status
@@ -15,6 +19,23 @@ from app.models import Token, User, UserCreate, UserOut
 
 router = APIRouter()
 
+# Timing defense: always run bcrypt even for non-existent emails.
+# This prevents response-time enumeration of valid email addresses.
+# The dummy hash is computed once at module load and reused.
+_DUMMY_HASH: str = ""
+_DUMMY_HASH_LOCK = threading.Lock()
+
+
+def _get_dummy_hash() -> str:
+    """Lazily compute and cache the dummy bcrypt hash for timing defense."""
+    global _DUMMY_HASH
+    if _DUMMY_HASH:
+        return _DUMMY_HASH
+    with _DUMMY_HASH_LOCK:
+        if not _DUMMY_HASH:
+            _DUMMY_HASH = hash_password("voicelib-timing-defense-placeholder-xK7mN2")
+    return _DUMMY_HASH
+
 
 @router.post(
     "/register",
@@ -26,7 +47,6 @@ async def register(
     payload: UserCreate,
     db: Annotated[AsyncSession, Depends(get_db)],
 ) -> Token:
-    # Check for duplicate email
     existing = await db.execute(select(User).where(User.email == payload.email))
     if existing.scalar_one_or_none():
         raise HTTPException(
@@ -55,7 +75,13 @@ async def login(
     result = await db.execute(select(User).where(User.email == payload.email))
     user = result.scalar_one_or_none()
 
-    if not user or not verify_password(payload.password, user.hashed_password):
+    # FIX: Always run bcrypt regardless of whether the email exists.
+    # Using a pre-computed dummy hash for non-existent users ensures the
+    # response time is constant, preventing user enumeration via timing.
+    hash_to_check = user.hashed_password if user else _get_dummy_hash()
+    password_valid = verify_password(payload.password, hash_to_check)
+
+    if not user or not password_valid:
         raise HTTPException(
             status_code=status.HTTP_401_UNAUTHORIZED,
             detail="Incorrect email or password.",

@@ -4,6 +4,18 @@ export default {
   theme: {
     extend: {
       colors: {
+        // ── Cyberpunk 2077 Anime-Tech Palette ─────────────────────────────
+        cyber: {
+          yellow: '#FCEE0A',
+          cyan:   '#00F0FF',
+          neon:   '#FF003C',
+          pink:   '#FF2A6D',
+          purple: '#9B51E0',
+          dark:   '#08090C',
+          panel:  '#101218',
+          raised: '#181A22',
+          border: 'rgba(0, 240, 255, 0.25)',
+        },
         // ── Clancy Signal palette ─────────────────────────────
         acid: {
           DEFAULT: '#E5FF00',
@@ -54,6 +66,7 @@ export default {
         sans:    ['"Plus Jakarta Sans"', 'system-ui', 'sans-serif'],
         display: ['"Space Grotesk"', '"Plus Jakarta Sans"', 'sans-serif'],
         mono:    ['"JetBrains Mono"', '"Fira Code"', 'monospace'],
+        cyber:   ['"Orbitron"', '"Space Grotesk"', 'sans-serif'],
       },
       borderRadius: {
         '2xl': '1rem',
@@ -61,6 +74,9 @@ export default {
         '4xl': '2rem',
       },
       boxShadow: {
+        // Cyberpunk 2077 glows
+        'glow-cyan':    '0 0 20px rgba(0,240,255,0.4), 0 0 60px rgba(0,240,255,0.15)',
+        'glow-yellow':  '0 0 20px rgba(252,238,10,0.4), 0 0 60px rgba(252,238,10,0.15)',
         // Clancy Signal glows
         'glow-acid':    '0 0 20px rgba(229,255,0,0.35), 0 0 60px rgba(229,255,0,0.12)',
         'glow-crimson': '0 0 16px rgba(255,0,60,0.40), 0 0 48px rgba(255,0,60,0.12)',
@@ -85,7 +101,7 @@ export default {
         'pulse-ring': { '0%': { transform: 'scale(1)', opacity: '0.8' }, '100%': { transform: 'scale(1.6)', opacity: '0' } },
         'waveform': { '0%, 100%': { transform: 'scaleY(0.4)' }, '50%': { transform: 'scaleY(1)' } },
         'spin-slow': { from: { transform: 'rotate(0deg)' }, to: { transform: 'rotate(360deg)' } },
-        // Clancy Signal new
+        // Clancy Signal
         'pulse-acid': {
           '0%, 100%': { boxShadow: '0 0 8px rgba(229,255,0,0.3)', opacity: '1' },
           '50%':      { boxShadow: '0 0 24px rgba(229,255,0,0.7)', opacity: '0.85' },

@@ -1,11 +1,15 @@
 """
-Voice Enhancement & Studio Mastering Pipeline.
+Voice Enhancement & Studio Mastering Pipeline — Backend post-processing pass.
 
-Transparent, natural, and warm mastering:
-  - Gentle sub-rumble highpass (45 Hz, order 2)
-  - Smooth noise gate for silent pauses (no breath cutoff)
-  - Pure, transparent peak normalization and soft ceiling (-0.5 dBFS)
-  - Zero artificial presence boost or high-shelf air (prevents digital sharpness)
+Since the Colab server already applies mastering (master_audio), this backend
+pass is intentionally lightweight — it acts as a safety net rather than a
+full second processing stage.
+
+Changes vs previous version:
+- HP cutoff raised from 45Hz → 80Hz (male voice safe)
+- Noise gate is SKIPPED if audio is already at target level (avoids double-gating
+  which caused pumping artifacts on already-processed Colab output)
+- Peak limiter target changed from -0.5dBFS → -1.0dBFS (matches Colab master_audio)
 """
 from __future__ import annotations
 
@@ -57,11 +61,11 @@ def _smooth_noise_gate(
     sr: int,
     threshold_db: float = -46.0,
     attack_ms: float = 15.0,
-    release_ms: float = 100.0,
+    release_ms: float = 200.0,   # FIX: 200ms release (was 100ms) prevents pumping
 ) -> np.ndarray:
-    """Smooth noise gate to mute dead space without clipping word decays."""
+    """Smooth noise gate. Longer release prevents volume-pumping on already-gated audio."""
     threshold = 10 ** (threshold_db / 20.0)
-    frame = max(1, int(sr * 0.010))  # 10ms window
+    frame = max(1, int(sr * 0.010))
     out = audio.copy()
     atk_samples = max(1, int(sr * attack_ms / 1000))
     rel_samples = max(1, int(sr * release_ms / 1000))
@@ -79,11 +83,15 @@ def _smooth_noise_gate(
     return out.astype(np.float32)
 
 
-def enhance_voice_audio(wav_bytes: bytes, sr: int = 32000) -> bytes:
+def enhance_voice_audio(wav_bytes: bytes) -> bytes:
     """
-    Transparent voice enhancer:
-    Preserves 100% of authentic speaker vocal warmth, soft tone, and dynamics.
-    Eliminates digital EQ harshness and inter-word silence buzz.
+    Transparent backend voice enhancer.
+
+    Since the Colab server already applies master_audio() (HP + noise gate +
+    peak limiter), this function acts as a lightweight safety net:
+    - Applies 80Hz high-pass to remove any residual sub-bass
+    - Skips noise gate if audio is already at target level (avoids double-gating)
+    - Applies peak limiter only if signal exceeds -1dBFS ceiling
     """
     try:
         audio, file_sr = _wav_to_float(wav_bytes)
@@ -97,23 +105,36 @@ def enhance_voice_audio(wav_bytes: bytes, sr: int = 32000) -> bytes:
     try:
         nyq = file_sr * 0.5
 
-        # 1. Gentle Sub-Rumble Cut (45 Hz, order 2) — Soft, preserves low-end chest warmth
-        if (45.0 / nyq) < 1.0 and len(audio) > 15:
-            sos = butter(2, 45.0 / nyq, btype='highpass', output='sos')
+        # 1. 80Hz high-pass (FIX: was 45Hz — raised to preserve male chest resonance)
+        if (80.0 / nyq) < 1.0 and len(audio) > 15:
+            sos = butter(2, 80.0 / nyq, btype='highpass', output='sos')
             audio = sosfilt(sos, audio).astype(np.float32)
 
-        # 2. Smooth Noise Gate (mutes pause hiss without truncating words)
-        audio = _smooth_noise_gate(audio, file_sr, threshold_db=-46.0, attack_ms=15.0, release_ms=100.0)
+        # 2. Noise gate — ONLY apply if audio peak is above -1dBFS
+        # (if Colab already mastered the audio, peak will be at ~-1dBFS and we skip)
+        peak = float(np.max(np.abs(audio)))
+        target_peak = 10 ** (-1.0 / 20.0)  # -1.0 dBFS
 
-        # 3. Transparent Peak Limiter (-0.5 dBFS ceiling)
-        max_val = float(np.max(np.abs(audio))) + 1e-9
-        target_peak = 10 ** (-0.5 / 20.0)  # ~0.944
-        if max_val > target_peak:
-            audio = audio * (target_peak / max_val)
-        audio = np.clip(audio, -0.98, 0.98)
+        if peak > target_peak * 1.05:   # 5% headroom before we intervene
+            # Audio is louder than expected — apply noise gate + limit
+            audio = _smooth_noise_gate(audio, file_sr, threshold_db=-46.0,
+                                        attack_ms=15.0, release_ms=200.0)
+            # Re-check peak after gating
+            peak = float(np.max(np.abs(audio))) + 1e-9
+            if peak > target_peak:
+                audio = audio * (target_peak / peak)
+        else:
+            # Audio is already at correct level — peak limiter only as safety
+            if peak > target_peak:
+                audio = audio * (target_peak / (peak + 1e-9))
+
+        audio = np.clip(audio, -0.95, 0.95)
 
     except Exception as e:
         logger.warning(f"Voice enhancer fallback: {e}")
-        audio, _ = _wav_to_float(wav_bytes)
+        try:
+            audio, _ = _wav_to_float(wav_bytes)
+        except Exception:
+            return wav_bytes
 
     return _float_to_wav(audio, file_sr)

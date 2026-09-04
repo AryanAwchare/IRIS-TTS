@@ -58,9 +58,15 @@ venv.bak/
 *.flac
 *.ogg
 *.m4a
+*.npy
+*.db
+*.sqlite
+*.sqlite3
 /tmp/
 logs/*.jsonl
 local_storage_data/
+voicelib/backend/data/
+data/
 
 # IDE & OS
 .vscode/

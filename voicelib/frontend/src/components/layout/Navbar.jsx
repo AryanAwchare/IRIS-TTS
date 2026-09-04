@@ -10,7 +10,7 @@ import { clsx } from 'clsx'
 const navItems = [
   { to: '/library',   label: 'Library',    Icon: MicrophoneIcon },
   { to: '/generate',  label: 'Generate',   Icon: SparklesIcon   },
-  { to: '/song-cover', label: 'Song Cover', Icon: MusicalNoteIcon, locked: true },
+  { to: '/song-cover', label: 'Song Cover', Icon: MusicalNoteIcon, locked: false },
 ]
 
 /**

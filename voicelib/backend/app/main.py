@@ -16,6 +16,7 @@ from fastapi import FastAPI
 from fastapi.middleware.cors import CORSMiddleware
 
 from app import db, storage, tts
+from app.config import get_settings
 from app.routers import auth_router, generate_router, song_cover, voices_router
 
 logging.basicConfig(
@@ -28,23 +29,42 @@ logger = logging.getLogger(__name__)
 @asynccontextmanager
 async def lifespan(app: FastAPI):
     """Application lifespan — startup and shutdown hooks."""
-    # ── Startup ──────────────────────────────────────────────────────────
     logger.info("VoiceLib starting up...")
 
-    # 1. Create DB tables (dev convenience; use Alembic in prod)
     await db.create_tables()
     logger.info("Database tables ready.")
 
-    # 2. Ensure object storage bucket exists (idempotent)
+    settings = get_settings()
+    if not getattr(settings, "debug", True) and settings.jwt_secret_key == "voicelib-localhost-secret-key-32chars":
+        logger.warning(
+            "CRITICAL SECURITY WARNING: Production mode running with default JWT_SECRET_KEY! "
+            "Configure a strong JWT_SECRET_KEY in production."
+        )
+
     storage.ensure_bucket_exists()
 
-    # 3. Load TTS model once — blocks until model is in memory
     tts.load_model()
 
-    logger.info("VoiceLib ready. All systems go. 🎙️")
+    async def _warmup_eval_models():
+        import asyncio
+        loop = asyncio.get_running_loop()
+        try:
+            from app.evaluation.speaker_similarity import _get_classifier
+            from app.evaluation.content_accuracy import _get_whisper_model
+            from app.utils.emotion_analyzer import _get_classifier as _get_emotion_classifier
+            await loop.run_in_executor(None, _get_classifier)
+            await loop.run_in_executor(None, _get_whisper_model)
+            await loop.run_in_executor(None, _get_emotion_classifier)
+            logger.info("Evaluation & Emotion models (ECAPA-TDNN, Whisper, DistilRoBERTa) pre-warmed successfully.")
+        except Exception as warm_err:
+            logger.debug(f"Models pre-warm notice: {warm_err}")
+
+    import asyncio
+    asyncio.create_task(_warmup_eval_models())
+
+    logger.info("VoiceLib ready. All systems go.")
     yield
 
-    # ── Shutdown ─────────────────────────────────────────────────────────
     logger.info("VoiceLib shutting down.")
     await db.engine.dispose()
 
@@ -62,6 +82,9 @@ app = FastAPI(
 )
 
 # ── CORS ─────────────────────────────────────────────────────────────────────
+# FIX: removed allow_origin_regex=r"https?://.*" which matched ALL origins,
+# defeating the purpose of the explicit allow_origins list.
+# Add your production domain to allow_origins when deploying.
 app.add_middleware(
     CORSMiddleware,
     allow_origins=[
@@ -71,11 +94,27 @@ app.add_middleware(
         "http://localhost:8000",
         "http://127.0.0.1:8000",
     ],
-    allow_origin_regex=r"https?://.*",
     allow_credentials=True,
     allow_methods=["*"],
     allow_headers=["*"],
 )
+
+
+@app.exception_handler(Exception)
+async def global_exception_handler(request: Request, exc: Exception):
+    logger.error(f"Unhandled error on {request.method} {request.url.path}: {exc}", exc_info=True)
+    origin = request.headers.get("origin", "http://localhost:5173")
+    return JSONResponse(
+        status_code=500,
+        content={"detail": str(exc)},
+        headers={
+            "Access-Control-Allow-Origin": origin,
+            "Access-Control-Allow-Credentials": "true",
+            "Access-Control-Allow-Methods": "*",
+            "Access-Control-Allow-Headers": "*",
+        },
+    )
+
 
 # ── Static Files (Local Disk Storage Fallback) ───────────────────────────────
 from fastapi.staticfiles import StaticFiles
@@ -88,24 +127,21 @@ app.mount("/storage_files", StaticFiles(directory=local_dir), name="storage_file
 app.include_router(auth_router.router, prefix="/auth", tags=["auth"])
 app.include_router(voices_router.router, prefix="/voices", tags=["voices"])
 app.include_router(generate_router.router, tags=["generate"])
-app.include_router(song_cover.router)   # Stub — no-op in v1
+app.include_router(song_cover.router)
 
 
 @app.get("/health", tags=["health"])
 async def health_check() -> dict:
-    """Health check endpoint for load balancers and monitoring."""
     return {"status": "ok", "version": "1.0.0"}
 
 
 @app.get("/model-info", tags=["health"])
 async def model_info() -> dict:
-    """Returns active TTS model metadata, capabilities, emotion support, and sample limits."""
     return tts.get_engine_info()
 
 
 @app.get("/colab-status", tags=["health"])
 async def colab_status() -> dict:
-    """Checks whether the external Colab GPU synthesis server is online."""
     import urllib.request
     import json
     from app.config import get_settings
@@ -151,11 +187,6 @@ async def colab_status() -> dict:
 
 @app.post("/colab-register", tags=["health"])
 async def colab_register(payload: dict) -> dict:
-    """
-    Called automatically by the Colab notebook on startup to register its ngrok URL.
-    Eliminates the need to manually copy-paste the URL into .env each session.
-    Requires COLAB_REGISTER_SECRET to prevent unauthorised URL injection.
-    """
     from fastapi import HTTPException
     from app.config import get_settings
     from app.tts_engines.gptsovits_engine import set_live_colab_url
@@ -168,9 +199,9 @@ async def colab_register(payload: dict) -> dict:
         raise HTTPException(status_code=403, detail="Invalid registration secret.")
 
     if not url or (not url.startswith("https://") and not url.startswith("http://")):
-        raise HTTPException(status_code=400, detail="Payload must contain a valid 'url' starting with http:// or https://.")
+        raise HTTPException(status_code=400, detail="Payload must contain a valid 'url'.")
 
     set_live_colab_url(url)
-    logger.info(f"🚀 Colab GPU URL auto-registered: {url}")
+    logger.info(f"Colab GPU URL auto-registered: {url}")
 
     return {"status": "registered", "url": url, "message": "Colab GPU server URL updated successfully."}

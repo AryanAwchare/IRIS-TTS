@@ -29,14 +29,17 @@ def _get_whisper_model() -> object:
                         "faster-whisper package is required for content_accuracy. "
                         "Please install it using: pip install faster-whisper"
                     )
-                logger.info("Loading faster-whisper (small.en) model on CPU...")
+                import torch
+                whisper_device = "cuda" if (torch is not None and hasattr(torch, "cuda") and torch.cuda.is_available()) else "cpu"
+                whisper_compute = "float16" if whisper_device == "cuda" else "int8"
+                logger.info(f"Loading faster-whisper (small.en) model on {whisper_device.upper()} ({whisper_compute})...")
                 _WHISPER_MODEL = WhisperModel(
                     "small.en",
-                    device="cpu",
-                    compute_type="int8",
+                    device=whisper_device,
+                    compute_type=whisper_compute,
                     download_root=os.path.join(os.path.expanduser("~"), ".cache", "whisper"),
                 )
-                logger.info("faster-whisper loaded and ready.")
+                logger.info(f"faster-whisper loaded and ready on {whisper_device.upper()}.")
     return _WHISPER_MODEL
 
 

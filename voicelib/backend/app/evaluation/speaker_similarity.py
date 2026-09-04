@@ -40,13 +40,14 @@ def _get_classifier() -> object:
                         "speechbrain package is required for speaker_similarity. "
                         "Please install it using: pip install speechbrain"
                     )
-                logger.info("Loading SpeechBrain ECAPA-TDNN (spkrec-ecapa-voxceleb) model on CPU...")
+                device = "cuda" if torch.cuda.is_available() else "cpu"
+                logger.info(f"Loading SpeechBrain ECAPA-TDNN (spkrec-ecapa-voxceleb) model on {device.upper()}...")
                 _CLASSIFIER = EncoderClassifier.from_hparams(
                     source="speechbrain/spkrec-ecapa-voxceleb",
                     savedir=_SAVEDIR,
-                    run_opts={"device": "cpu"},
+                    run_opts={"device": device},
                 )
-                logger.info("SpeechBrain ECAPA-TDNN loaded and ready.")
+                logger.info(f"SpeechBrain ECAPA-TDNN loaded and ready on {device.upper()}.")
     return _CLASSIFIER
 
 

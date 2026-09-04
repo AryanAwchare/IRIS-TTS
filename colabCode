@@ -40,7 +40,7 @@ pip("install", "-q", "--no-cache-dir",
     "python-multipart", "requests",
     "librosa", "soundfile", "scipy", "noisereduce",
     "jiwer", "speechbrain", "faster-whisper",
-    "transformers==4.47.1", "accelerate", "safetensors")
+    "huggingface_hub", "transformers==4.47.1", "accelerate", "safetensors")
 
 # 3. Chatterbox supporting deps
 pip("install", "-q", "--no-cache-dir",
@@ -124,6 +124,15 @@ def _register_nms_shim():
     print("✅ torchvision.ops shimmed via module mock")
 
 _register_nms_shim()
+
+# ── Transformers HF-Hub version check bypass ──────────────────────────────────
+try:
+    import transformers.utils.versions as tfmr_versions
+    tfmr_versions.require_version = lambda *args, **kwargs: None
+    tfmr_versions.require_version_core = lambda *args, **kwargs: None
+    print("✅ transformers version check patched (allows modern huggingface-hub)")
+except Exception:
+    pass
 
 # ── Torchaudio safe load ──────────────────────────────────────────────────────
 def _make_torchaudio_mock():
@@ -327,6 +336,45 @@ if not hasattr(sys.modules.get("perth"), "PerthImplicitWatermarker"):
         if "chatterbox" in k:
             del sys.modules[k]
     print("✅ perth re-mocked and chatterbox cache cleared")
+
+# Disable Xet backend in Hugging Face (forces rock-solid standard HTTP streaming)
+import os
+os.environ["HF_HUB_DISABLE_XET"] = "1"
+os.environ["HF_HUB_ENABLE_HF_TRANSFER"] = "0"
+
+# Transformers HF-Hub version check bypass
+try:
+    import transformers.utils.versions as tfmr_versions
+    tfmr_versions.require_version = lambda *args, **kwargs: None
+    tfmr_versions.require_version_core = lambda *args, **kwargs: None
+except Exception:
+    pass
+
+# HuggingFace Xet Progress Reporter universal shim
+try:
+    import types
+    try:
+        import huggingface_hub.utils._xet_progress_reporting as _xpr
+    except Exception:
+        _xpr = types.ModuleType("huggingface_hub.utils._xet_progress_reporting")
+        sys.modules["huggingface_hub.utils._xet_progress_reporting"] = _xpr
+
+    class _UniversalDummy:
+        def __init__(self, *args, **kwargs):
+            self.total_transfer_bytes_completed = 0
+            self.total = 0
+            self.n = 0
+        def __call__(self, *args, **kwargs): return self
+        def __getattr__(self, name): return self
+        def __enter__(self): return self
+        def __exit__(self, *args): pass
+        def __int__(self): return 0
+        def __float__(self): return 0.0
+        def __bool__(self): return True
+
+    _xpr.XetDownloadProgressReporter = _UniversalDummy
+except Exception:
+    pass
 
 _MODEL = None
 _MODEL_LOCK = threading.Lock()

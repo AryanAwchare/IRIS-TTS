@@ -104,6 +104,28 @@ function GenerationHistoryItem({ gen, isSelected, isLatest, onPlay, onAnalyze })
           <span className="text-[10px] uppercase font-mono px-1.5 py-0.2 rounded bg-white/[0.06] text-surface-300">
             {gen.engine === 'pocket-tts' ? 'Pocket' : 'Neural'}
           </span>
+          {/* Objective Multi-Metric Composite Grade */}
+          {gen.composite_grade && (
+            <span
+              className={`text-[10px] font-bold font-mono px-1.5 py-0.2 rounded border shrink-0 transition-transform ${
+                gen.composite_grade === 'A'
+                  ? 'bg-emerald-500/20 text-emerald-300 border-emerald-500/30'
+                  : gen.composite_grade === 'B'
+                  ? 'bg-blue-500/20 text-blue-300 border-blue-500/30'
+                  : gen.composite_grade === 'C'
+                  ? 'bg-amber-500/20 text-amber-300 border-amber-500/30'
+                  : 'bg-rose-500/20 text-rose-300 border-rose-500/30'
+              }`}
+              title={`Objective Eval: Grade ${gen.composite_grade} | Sim: ${gen.speaker_similarity != null ? (gen.speaker_similarity * 100).toFixed(0) + '%' : 'N/A'} | WER: ${gen.word_error_rate != null ? (gen.word_error_rate * 100).toFixed(0) + '%' : 'N/A'} | F0 σ: ${gen.prosody_f0_std != null ? gen.prosody_f0_std.toFixed(0) + 'Hz' : 'N/A'}`}
+            >
+              Grade {gen.composite_grade}
+            </span>
+          )}
+          {gen.eval_status === 'pending' && (
+            <span className="text-[9px] font-mono px-1.5 py-0.2 rounded bg-primary-500/20 text-primary-300 border border-primary-500/30 animate-pulse shrink-0" title="Computing ECAPA-TDNN & Whisper metrics in background...">
+              ⚡ Eval...
+            </span>
+          )}
           {isSelected && (
             <span className="text-[10px] font-semibold text-primary-400 font-mono">
               ● Active
@@ -202,6 +224,7 @@ export default function Generate({ onGpuStatus }) {
   // Speech Modifiers (Default 1.0 for 100% natural authentic speaker pacing)
   const [speed, setSpeed]                       = useState(1.0)
   const [pitch, setPitch]                       = useState(0)
+  const [userIntensity, setUserIntensity]       = useState(0.50)
 
   // Restore Pocket TTS settings from localStorage
   useEffect(() => {
@@ -278,6 +301,26 @@ export default function Generate({ onGpuStatus }) {
     refreshHistory()
   }, [])
 
+  // Auto-poll evaluation status for pending generations
+  useEffect(() => {
+    if (!history || history.length === 0) return
+    const hasPending = history.some((g) => g.eval_status === 'pending')
+    if (!hasPending) return
+
+    const pollInterval = setInterval(() => {
+      refreshHistory()
+    }, 3000)
+
+    const timer = setTimeout(() => {
+      clearInterval(pollInterval)
+    }, 25000)
+
+    return () => {
+      clearInterval(pollInterval)
+      clearTimeout(timer)
+    }
+  }, [history])
+
   const selectedVoice = voices.find((v) => v.id === selectedVoiceId)
   const simVoice = voices.find((v) => v.id === similarityGen?.voice_id) || selectedVoice
   const canGenerate = selectedVoiceId && text.trim().length > 0 && !loading
@@ -289,6 +332,8 @@ export default function Generate({ onGpuStatus }) {
     else if (emoId === 'excited') setEmotions({ happiness: 0.5, sadness: 0, disgust: 0, fear: 0, surprise: 0.5, anger: 0, neutral: 0, other: 0 })
     else if (emoId === 'sad') setEmotions({ happiness: 0, sadness: 0.8, disgust: 0, fear: 0.1, surprise: 0, anger: 0, neutral: 0.1, other: 0 })
     else if (emoId === 'angry') setEmotions({ happiness: 0, sadness: 0, disgust: 0.2, fear: 0, surprise: 0, anger: 0.8, neutral: 0, other: 0 })
+    else if (emoId === 'fearful') setEmotions({ happiness: 0, sadness: 0.2, disgust: 0, fear: 0.8, surprise: 0.2, anger: 0, neutral: 0, other: 0 })
+    else if (emoId === 'disgusted') setEmotions({ happiness: 0, sadness: 0.1, disgust: 0.8, fear: 0, surprise: 0, anger: 0.3, neutral: 0, other: 0 })
     else if (emoId === 'calm') setEmotions({ happiness: 0.1, sadness: 0, disgust: 0, fear: 0, surprise: 0, anger: 0, neutral: 0.9, other: 0 })
     else if (emoId === 'neutral') setEmotions({ happiness: 0.1, sadness: 0, disgust: 0, fear: 0, surprise: 0, anger: 0, neutral: 0.9, other: 0 })
   }
@@ -378,6 +423,7 @@ export default function Generate({ onGpuStatus }) {
       const opts = {
         engine,
         emotion: selectedEmotion,
+        user_intensity: userIntensity,
         rank,
         top_p: topP,
         temperature,
@@ -628,6 +674,8 @@ export default function Generate({ onGpuStatus }) {
                         { id: 'calm', label: '😌 Calm', color: 'bg-cyan-500/20 text-cyan-300 border-cyan-500/40' },
                         { id: 'sad', label: '😢 Sad', color: 'bg-blue-500/20 text-blue-300 border-blue-500/40' },
                         { id: 'angry', label: '😠 Angry', color: 'bg-rose-500/20 text-rose-300 border-rose-500/40' },
+                        { id: 'fearful', label: '😨 Fearful', color: 'bg-amber-700/20 text-amber-300 border-amber-600/40' },
+                        { id: 'disgusted', label: '🤢 Disgusted', color: 'bg-lime-500/20 text-lime-300 border-lime-500/40' },
                         { id: 'neutral', label: '😐 Neutral', color: 'bg-zinc-800 text-zinc-300 border-zinc-700' },
                       ].map((emo) => {
                         const isCurrent = selectedEmotion === emo.id
@@ -646,6 +694,33 @@ export default function Generate({ onGpuStatus }) {
                           </button>
                         )
                       })}
+                    </div>
+
+                    {/* Manual Emotion Delivery Intensity Slider */}
+                    <div className="mt-3 p-3 rounded-xl bg-white/[0.02] border border-white/[0.08]">
+                      <div className="flex items-center justify-between mb-1.5">
+                        <label className="text-xs font-mono text-surface-300 flex items-center gap-1.5">
+                          <span className="text-cyber-yellow">◈</span> Delivery Intensity Override: {(userIntensity * 100).toFixed(0)}%
+                        </label>
+                        <span className="text-[10px] font-mono text-cyber-cyan font-bold tracking-wider">
+                          {userIntensity <= 0.35 ? 'SUBTLE' : userIntensity <= 0.65 ? 'NATURAL' : userIntensity <= 0.85 ? 'EXPRESSIVE' : 'MAXIMUM INTENSITY'}
+                        </span>
+                      </div>
+                      <input
+                        type="range"
+                        min="0.05"
+                        max="1.0"
+                        step="0.05"
+                        value={userIntensity}
+                        onChange={(e) => setUserIntensity(parseFloat(e.target.value))}
+                        className="w-full accent-cyber-yellow h-1.5 bg-zinc-800 rounded-lg cursor-pointer"
+                      />
+                      <div className="flex justify-between mt-1.5 text-[10px] font-mono text-surface-400">
+                        <button type="button" onClick={() => setUserIntensity(0.25)} className="hover:text-cyber-yellow transition-colors">Subtle (25%)</button>
+                        <button type="button" onClick={() => setUserIntensity(0.50)} className="hover:text-cyber-yellow transition-colors">Natural (50%)</button>
+                        <button type="button" onClick={() => setUserIntensity(0.75)} className="hover:text-cyber-yellow transition-colors">Strong (75%)</button>
+                        <button type="button" onClick={() => setUserIntensity(1.00)} className="hover:text-cyber-yellow transition-colors">Max (100%)</button>
+                      </div>
                     </div>
                   </div>
 

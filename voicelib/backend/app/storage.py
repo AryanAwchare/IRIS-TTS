@@ -10,9 +10,10 @@ Works with:
 from __future__ import annotations
 
 import logging
-import os
+import threading
 import uuid
 from pathlib import Path
+from typing import Any, Optional
 
 import boto3
 from botocore.exceptions import BotoCoreError, ClientError
@@ -23,51 +24,75 @@ logger = logging.getLogger(__name__)
 
 LOCAL_STORAGE_DIR = Path("./local_storage_data")
 
+# ── FIX: boto3 singleton client — was created on every call (expensive SSL setup) ──
+_s3_client: Optional[Any] = None
+_s3_client_lock = threading.Lock()
 
-def _get_client():
-    s = get_settings()
-    kwargs: dict = dict(
-        aws_access_key_id=s.storage_access_key,
-        aws_secret_access_key=s.storage_secret_key,
-        region_name=s.storage_region,
-    )
-    if s.storage_endpoint_url:
-        kwargs["endpoint_url"] = s.storage_endpoint_url
-    return boto3.client("s3", **kwargs)
-
-
+# ── FIX: thread-safe flag for local fallback mode ────────────────────────────
 _local_fallback_active = False
+_local_fallback_lock = threading.Lock()
+
+
+def _set_local_fallback(value: bool) -> None:
+    global _local_fallback_active
+    with _local_fallback_lock:
+        _local_fallback_active = value
 
 
 def _is_local_mode() -> bool:
+    with _local_fallback_lock:
+        if _local_fallback_active:
+            return True
     s = get_settings()
-    if _local_fallback_active or (s.storage_access_key in ("local", "minioadmin") and not s.storage_endpoint_url):
-        return True
-    return False
+    return s.storage_access_key in ("local", "minioadmin") and not s.storage_endpoint_url
+
+
+def _get_client() -> Any:
+    """Return cached boto3 S3 client (singleton, thread-safe)."""
+    global _s3_client
+    if _s3_client is not None:
+        return _s3_client
+    with _s3_client_lock:
+        if _s3_client is None:
+            s = get_settings()
+            kwargs: dict = dict(
+                aws_access_key_id=s.storage_access_key,
+                aws_secret_access_key=s.storage_secret_key,
+                region_name=s.storage_region,
+            )
+            if s.storage_endpoint_url:
+                kwargs["endpoint_url"] = s.storage_endpoint_url
+            _s3_client = boto3.client("s3", **kwargs)
+    return _s3_client
+
+
+def reset_client() -> None:
+    """Force recreation of the boto3 client (e.g. after credential rotation)."""
+    global _s3_client
+    with _s3_client_lock:
+        _s3_client = None
 
 
 def ensure_bucket_exists() -> None:
     """Create S3 bucket or local storage directory if missing."""
-    global _local_fallback_active
     s = get_settings()
     LOCAL_STORAGE_DIR.mkdir(parents=True, exist_ok=True)
     if _is_local_mode():
-        _local_fallback_active = True
+        _set_local_fallback(True)
         logger.info("Using local disk storage fallback.")
         return
 
     try:
         client = _get_client()
         client.head_bucket(Bucket=s.storage_bucket_name)
-        _local_fallback_active = False
+        _set_local_fallback(False)
         logger.info(f"Storage bucket '{s.storage_bucket_name}' ready.")
     except Exception as e:
-        _local_fallback_active = True
+        _set_local_fallback(True)
         logger.warning(f"S3 connection check failed ({e}). Enabling local disk storage fallback.")
 
 
 def upload_bytes(data: bytes, content_type: str, prefix: str = "uploads") -> str:
-    global _local_fallback_active
     s = get_settings()
     key = f"{prefix}/{uuid.uuid4()}"
 
@@ -87,7 +112,7 @@ def upload_bytes(data: bytes, content_type: str, prefix: str = "uploads") -> str
         )
         logger.info(f"Uploaded {len(data):,} bytes to S3 → {key}")
     except Exception as e:
-        _local_fallback_active = True
+        _set_local_fallback(True)
         logger.warning(f"S3 upload failed ({e}). Saving to local disk fallback: {key}")
         target_path = LOCAL_STORAGE_DIR / key
         target_path.parent.mkdir(parents=True, exist_ok=True)
@@ -96,7 +121,6 @@ def upload_bytes(data: bytes, content_type: str, prefix: str = "uploads") -> str
 
 
 def download_bytes(key: str) -> bytes:
-    global _local_fallback_active
     s = get_settings()
 
     if (LOCAL_STORAGE_DIR / key).exists() or _is_local_mode():
@@ -110,7 +134,7 @@ def download_bytes(key: str) -> bytes:
         logger.info(f"Downloaded {len(data):,} bytes from S3 ← {key}")
         return data
     except Exception as e:
-        _local_fallback_active = True
+        _set_local_fallback(True)
         logger.warning(f"S3 download failed ({e}). Reading from local disk fallback: {key}")
         target_path = LOCAL_STORAGE_DIR / key
         if target_path.exists():

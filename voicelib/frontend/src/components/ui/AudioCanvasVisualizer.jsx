@@ -24,6 +24,9 @@ export function AudioCanvasVisualizer({ audioRef, mode = 'bars', height = 80, is
       const AudioCtx = window.AudioContext || window.webkitAudioContext
       if (!AudioCtx) return
       const ctx      = new AudioCtx()
+      if (ctx.state === 'suspended') {
+        ctx.resume().catch(() => {})
+      }
       const analyser = ctx.createAnalyser()
       analyser.fftSize           = 128
       analyser.smoothingTimeConstant = 0.82

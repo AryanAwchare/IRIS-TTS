@@ -46,6 +46,8 @@ export function AudioPlayer({ url, voiceName = 'audio', generationId = null, aut
 
   const togglePlay = () => {
     if (!audioRef.current || audioError) return
+    if (audioRef.current.muted) audioRef.current.muted = false
+    audioRef.current.volume = 1.0
     if (playing) {
       audioRef.current.pause()
       setPlaying(false)
@@ -57,7 +59,7 @@ export function AudioPlayer({ url, voiceName = 'audio', generationId = null, aut
           .catch((err) => {
             console.warn('Audio playback error:', err)
             setPlaying(false)
-            setAudioError('Playback failed. The audio file may still be finalizing.')
+            setAudioError('Playback failed. Please click play or try generating again.')
           })
       } else {
         setPlaying(true)
@@ -143,6 +145,7 @@ export function AudioPlayer({ url, voiceName = 'audio', generationId = null, aut
         <audio
           ref={audioRef}
           src={url}
+          crossOrigin="anonymous"
           onTimeUpdate={handleTimeUpdate}
           onLoadedMetadata={handleLoadedMetadata}
           onEnded={handleEnded}

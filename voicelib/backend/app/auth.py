@@ -4,6 +4,7 @@ Uses python-jose for HS256 signing and passlib[bcrypt] for password hashing.
 """
 from __future__ import annotations
 
+import uuid as _uuid_module
 from datetime import datetime, timedelta, timezone
 from typing import Annotated
 
@@ -72,7 +73,14 @@ async def get_current_user(
     except JWTError:
         raise credentials_exception
 
-    result = await db.execute(select(User).where(User.id == token_data.user_id))
+    # FIX: convert str → uuid.UUID before querying PG_UUID column
+    # Previously compared str to PG_UUID → type mismatch → always 0 rows on PostgreSQL
+    try:
+        user_uuid = _uuid_module.UUID(token_data.user_id)
+    except (ValueError, AttributeError):
+        raise credentials_exception
+
+    result = await db.execute(select(User).where(User.id == user_uuid))
     user = result.scalar_one_or_none()
     if user is None:
         raise credentials_exception
@@ -91,8 +99,9 @@ async def get_user_from_token_str(token: str, db: AsyncSession) -> User | None:
         user_id: str | None = payload.get("sub")
         if not user_id:
             return None
-        result = await db.execute(select(User).where(User.id == user_id))
+        # FIX: convert str → uuid.UUID before querying PG_UUID column
+        user_uuid = _uuid_module.UUID(user_id)
+        result = await db.execute(select(User).where(User.id == user_uuid))
         return result.scalar_one_or_none()
     except Exception:
         return None
-

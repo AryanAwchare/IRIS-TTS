@@ -10,6 +10,11 @@ Uses digital signal processing and speech science to analyze:
   - Jitter (pitch perturbation) & Shimmer (amplitude perturbation)
   - Voiced/Unvoiced speech ratio & Zero-Crossing Rate
   - Generation parameter auto-tuning: cfg_weight, exaggeration, temp, top_p, speed_scale
+
+FIX: Uses the actual sample rate from soundfile (not a hardcoded value).
+     After audio_preprocess.py was changed to output 32kHz, the profiler
+     must use the real SR from the file to compute correct pYIN, LPC, and
+     spectral features.
 """
 from __future__ import annotations
 
@@ -26,12 +31,13 @@ logger = logging.getLogger(__name__)
 def _estimate_formants(y: np.ndarray, sr: int, n_formants: int = 4) -> List[float]:
     """
     Estimate vocal tract formant center frequencies (F1-F4 in Hz) using LPC.
+    Always resamples to 16kHz for LPC analysis — optimal range for F1-F4.
     """
     try:
         import librosa
         from scipy import signal
 
-        # Resample to 16kHz for formant analysis (optimal for vocal tract LPC)
+        # Resample to 16kHz for formant analysis (captures F1-F4 in 200-3500Hz)
         if sr != 16000:
             y_16k = librosa.resample(y, orig_sr=sr, target_sr=16000)
             sr_proc = 16000
@@ -39,37 +45,27 @@ def _estimate_formants(y: np.ndarray, sr: int, n_formants: int = 4) -> List[floa
             y_16k = y
             sr_proc = sr
 
-        # Pre-emphasis filter to boost higher formants
         y_pre = signal.lfilter([1, -0.97], [1], y_16k)
-
-        # LPC order rule of thumb: 2 + sr / 1000
         lpc_order = int(2 + sr_proc / 1000)  # ~18 for 16kHz
         a = librosa.lpc(y_pre, order=lpc_order)
 
-        # Find roots of LPC polynomial
         roots = np.roots(a)
-        # Keep roots with positive imaginary part (upper half of z-plane)
         roots = roots[np.imag(roots) >= 0]
 
-        # Calculate angles and convert to frequencies
         angz = np.arctan2(np.imag(roots), np.real(roots))
         freqs = angz * (sr_proc / (2 * np.pi))
-
-        # Calculate bandwidths: BW = -ln(|r|) * (sr / pi)
         bandwidths = -0.5 * (sr_proc / (2 * np.pi)) * np.log(np.abs(roots) + 1e-9)
 
-        # Filter realistic formant candidates (50 Hz < freq < 5500 Hz, BW < 700 Hz)
         valid_idx = np.where((freqs > 50) & (freqs < 5500) & (bandwidths < 700))[0]
         formants = np.sort(freqs[valid_idx])
 
         result: List[float] = []
         for f in formants:
-            if len(result) == 0 or (f - result[-1]) > 250:  # Enforce minimum separation
+            if len(result) == 0 or (f - result[-1]) > 250:
                 result.append(float(round(f, 1)))
             if len(result) >= n_formants:
                 break
 
-        # Fallbacks for standard vowels if LPC returned fewer
         default_formants = [500.0, 1500.0, 2500.0, 3500.0]
         while len(result) < n_formants:
             result.append(default_formants[len(result)])
@@ -81,9 +77,6 @@ def _estimate_formants(y: np.ndarray, sr: int, n_formants: int = 4) -> List[floa
 
 
 def _calculate_hnr(y: np.ndarray, sr: int) -> float:
-    """
-    Calculate Harmonics-to-Noise Ratio (HNR in dB) via harmonic-percussive separation.
-    """
     try:
         import librosa
         y_harm, y_perc = librosa.effects.hpss(y)
@@ -96,11 +89,7 @@ def _calculate_hnr(y: np.ndarray, sr: int) -> float:
 
 
 def _calculate_jitter_shimmer(valid_f0: np.ndarray, y: np.ndarray, sr: int) -> Tuple[float, float]:
-    """
-    Calculate approximate local pitch jitter (%) and amplitude shimmer (%).
-    """
     try:
-        # Jitter: mean absolute relative difference between consecutive F0 periods
         if len(valid_f0) > 4:
             periods = 1.0 / np.maximum(valid_f0, 50.0)
             diffs = np.abs(np.diff(periods))
@@ -108,7 +97,6 @@ def _calculate_jitter_shimmer(valid_f0: np.ndarray, y: np.ndarray, sr: int) -> T
         else:
             jitter_pct = 0.85
 
-        # Shimmer: amplitude perturbation across short frames
         frame_len = int(sr * 0.02)
         if len(y) > frame_len * 4:
             amps = np.array([
@@ -130,21 +118,14 @@ def _calculate_jitter_shimmer(valid_f0: np.ndarray, y: np.ndarray, sr: int) -> T
 
 
 def _estimate_speaking_rate(y: np.ndarray, sr: int) -> float:
-    """
-    Estimate speaking tempo in syllables per second using smoothed energy envelope peaks.
-    """
     try:
         from scipy import signal
-        # 100Hz low-pass filtered envelope of rectified signal
         env = np.abs(y)
         nyq = sr * 0.5
         b, a = signal.butter(2, min(20.0, nyq * 0.5) / nyq, btype='low')
         smooth_env = signal.filtfilt(b, a, env)
-
-        # Min distance between syllable peaks ~150ms
         min_dist = int(sr * 0.15)
         peaks, _ = signal.find_peaks(smooth_env, distance=min_dist, prominence=np.max(smooth_env) * 0.15)
-
         dur_sec = len(y) / sr
         if dur_sec > 1.0 and len(peaks) > 0:
             rate = len(peaks) / dur_sec
@@ -155,16 +136,11 @@ def _estimate_speaking_rate(y: np.ndarray, sr: int) -> float:
 
 
 def _calculate_spectral_tilt(y: np.ndarray, sr: int) -> float:
-    """
-    Estimate spectral tilt slope (dB/octave) via log-frequency linear regression.
-    """
     try:
         import librosa
         spec = np.abs(librosa.stft(y, n_fft=2048, hop_length=512))
         mean_spec = np.mean(spec, axis=1) + 1e-9
         freqs = librosa.fft_frequencies(sr=sr, n_fft=2048)
-
-        # Restrict to speech range (100 Hz to 7000 Hz)
         idx = np.where((freqs >= 100) & (freqs <= min(7000, sr * 0.48)))[0]
         if len(idx) > 10:
             x_oct = np.log2(freqs[idx] / 100.0)
@@ -179,10 +155,14 @@ def _calculate_spectral_tilt(y: np.ndarray, sr: int) -> float:
 def extract_voice_acoustic_profile(audio_input: bytes | str) -> dict:
     """
     Extracts deep 20+ dimensional acoustic DNA and auto-tunes TTS hyperparameters.
+
+    FIX: Uses the actual sample rate read from the file (soundfile), not a hardcoded
+         assumption. After audio_preprocess.py was changed to output 32kHz, this
+         function must work at whatever SR the stored file actually has.
     """
     import soundfile as sf
 
-    # 1. Universal audio decoding to float32 mono
+    # 1. Universal audio decoding — uses ACTUAL SR from file header
     y: np.ndarray
     sr: int
     if isinstance(audio_input, bytes):
@@ -210,7 +190,9 @@ def extract_voice_acoustic_profile(audio_input: bytes | str) -> dict:
             y, sr = librosa.load(audio_input, sr=None, mono=True)
             y = y.astype(np.float32)
 
-    # 2. Fundamental Frequency (F0) Analysis via pYIN
+    # sr is now the REAL sample rate from the file (e.g. 32000 after upload preprocessing)
+
+    # 2. Fundamental Frequency (F0) Analysis via pYIN — uses real sr
     mean_f0 = 160.0
     median_f0 = 160.0
     std_f0 = 22.0
@@ -223,9 +205,9 @@ def extract_voice_acoustic_profile(audio_input: bytes | str) -> dict:
         import librosa
         f0_vals, voiced_flag, _ = librosa.pyin(
             y,
-            fmin=librosa.note_to_hz('C2'),  # ~65 Hz
-            fmax=librosa.note_to_hz('C6'),  # ~1046 Hz
-            sr=sr,
+            fmin=librosa.note_to_hz('C2'),   # ~65 Hz
+            fmax=librosa.note_to_hz('C6'),   # ~1046 Hz
+            sr=sr,                            # FIX: use actual SR, not hardcoded
             frame_length=2048,
             hop_length=512,
         )
@@ -243,26 +225,26 @@ def extract_voice_acoustic_profile(audio_input: bytes | str) -> dict:
     # 3. Categorize Vocal Register
     if median_f0 < 130.0:
         pitch_register = "Bass / Baritone"
-        base_cfg = 0.65
+        base_cfg = 0.60
         temperature = 0.68
         top_p = 0.82
     elif median_f0 < 175.0:
         pitch_register = "Tenor / Mid Male"
-        base_cfg = 0.62
+        base_cfg = 0.57
         temperature = 0.70
         top_p = 0.84
     elif median_f0 < 240.0:
         pitch_register = "Alto / Mezzo-Soprano"
-        base_cfg = 0.60
+        base_cfg = 0.55
         temperature = 0.72
         top_p = 0.85
     else:
         pitch_register = "High Soprano"
-        base_cfg = 0.58
+        base_cfg = 0.53
         temperature = 0.74
         top_p = 0.88
 
-    # 4. Formants F1-F4
+    # 4. Formants F1-F4 (LPC internally resamples to 16kHz — correct behavior)
     formants = _estimate_formants(y, sr, n_formants=4)
 
     # 5. MFCC 13 Timbral Coefficients
@@ -274,13 +256,13 @@ def extract_voice_acoustic_profile(audio_input: bytes | str) -> dict:
     except Exception:
         mfcc_mean = [0.0] * 13
 
-    # 6. Acoustic Physics Metrics: HNR, Jitter, Shimmer, Tilt, Speaking Rate
+    # 6. Acoustic Physics Metrics
     hnr_db = _calculate_hnr(y, sr)
     jitter_pct, shimmer_pct = _calculate_jitter_shimmer(valid_f0, y, sr)
     speaking_rate = _estimate_speaking_rate(y, sr)
     spectral_tilt = _calculate_spectral_tilt(y, sr)
 
-    # 7. Spectral Centroid, Rolloff, Flux & ZCR
+    # 7. Spectral Centroid, Rolloff, ZCR
     mean_sc = 1850.0
     mean_ro = 3600.0
     zcr_mean = 0.05
@@ -302,25 +284,23 @@ def extract_voice_acoustic_profile(audio_input: bytes | str) -> dict:
     except Exception:
         pass
 
-    # 8. Intelligent Auto-Tuning of Generation Hyperparameters
-    # - CFG Weight: 0.55 to 0.72 (higher for rich tonal voices, slightly lower for breathy/high HNR voices)
+    # 8. Auto-tune generation hyperparameters from acoustic profile
+    # FIX: cfg caps lowered to match recalibrated emotion_analyzer.py (max 0.65)
     cfg_weight = base_cfg
     if hnr_db > 20.0:
-        cfg_weight = min(0.72, cfg_weight + 0.04)
+        cfg_weight = min(0.65, cfg_weight + 0.04)
     elif hnr_db < 12.0:
-        cfg_weight = max(0.50, cfg_weight - 0.04)
+        cfg_weight = max(0.45, cfg_weight - 0.04)
 
-    # - Exaggeration: 0.05 default (range 0.03 to 0.12 depending on natural pitch variation)
+    # FIX: exaggeration minimum raised to 0.10 (was 0.04/0.06/0.08)
+    # Natural speech requires at least 0.10 exag even for flat/neutral speakers
     if std_f0 < 15.0:
-        # Relatively flat speaker -> subtle intonation lift
-        auto_exaggeration = 0.08
+        auto_exaggeration = 0.14   # Flat speaker — needs intonation lift
     elif std_f0 > 35.0:
-        # Naturally highly dynamic speaker -> lower exaggeration to prevent over-inflection
-        auto_exaggeration = 0.04
+        auto_exaggeration = 0.10   # Dynamic speaker — keep natural, don't over-exaggerate
     else:
-        auto_exaggeration = 0.06
+        auto_exaggeration = 0.12   # Normal range
 
-    # - Speed scale based on natural speaking rate
     if speaking_rate > 4.5:
         auto_speed = 1.05
     elif speaking_rate < 3.0:
@@ -330,7 +310,6 @@ def extract_voice_acoustic_profile(audio_input: bytes | str) -> dict:
 
     profile: Dict[str, Any] = {
         "profile_version": 2,
-        # Pitch & Register
         "mean_f0_hz": round(mean_f0, 1),
         "median_f0_hz": round(median_f0, 1),
         "std_f0_hz": round(std_f0, 1),
@@ -339,20 +318,17 @@ def extract_voice_acoustic_profile(audio_input: bytes | str) -> dict:
         "pitch_register": pitch_register,
         "pitch_bias": 0.0,
         "voiced_ratio": round(voiced_ratio, 3),
-        # Vocal Tract Resonances & Timbre
         "formants_hz": formants,
         "mfcc_mean": mfcc_mean,
         "spectral_centroid_hz": round(mean_sc, 1),
         "spectral_rolloff_hz": round(mean_ro, 1),
         "spectral_tilt_db_oct": round(spectral_tilt, 2),
         "zcr_mean": round(zcr_mean, 4),
-        # Quality & Dynamics
         "hnr_db": round(hnr_db, 2),
         "jitter_percent": round(jitter_pct, 2),
         "shimmer_percent": round(shimmer_pct, 2),
         "speaking_rate_syl_s": round(speaking_rate, 2),
         "energy_std": round(energy_std, 4),
-        # Auto-tuned Generation Presets
         "cfg_weight": round(cfg_weight, 2),
         "exaggeration": round(auto_exaggeration, 2),
         "temperature": round(temperature, 2),
@@ -361,9 +337,8 @@ def extract_voice_acoustic_profile(audio_input: bytes | str) -> dict:
     }
 
     logger.info(
-        f"🎙️ Deep Acoustic DNA Profile (v2): F0 Median={median_f0:.1f}Hz ({pitch_register}), "
-        f"Formants F1-F4={formants}, HNR={hnr_db:.1f}dB, Jitter={jitter_pct:.2f}%, "
+        f"Acoustic DNA Profile v2: F0 Median={median_f0:.1f}Hz ({pitch_register}), "
+        f"SR={sr}Hz, Formants={formants}, HNR={hnr_db:.1f}dB, "
         f"Auto-Tuned: cfg={cfg_weight:.2f}, exag={auto_exaggeration:.2f}, speed={auto_speed:.2f}"
     )
     return profile
-

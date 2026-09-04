@@ -236,12 +236,17 @@ class PocketTTSEngine(BaseTTSEngine):
             except Exception as morph_err:
                 logger.warning(f"Acoustic timbre morphing fallback ({morph_err})")
 
-        # 3. Speed adjustments if requested
+        # 3. Speed adjustments if requested (pitch-preserving time-stretch)
         speed = kwargs.get("speed", 1.0)
         if abs(speed - 1.0) > 0.05 and speed > 0.2:
-            new_len = int(len(audio_array) / speed)
-            indices = np.linspace(0, len(audio_array) - 1, new_len)
-            audio_array = np.interp(indices, np.arange(len(audio_array)), audio_array).astype(np.float32)
+            try:
+                import librosa
+                audio_array = librosa.effects.time_stretch(y=audio_array, rate=float(speed)).astype(np.float32)
+            except Exception as stretch_err:
+                logger.warning(f"librosa time_stretch fallback ({stretch_err})")
+                new_len = int(len(audio_array) / speed)
+                indices = np.linspace(0, len(audio_array) - 1, new_len)
+                audio_array = np.interp(indices, np.arange(len(audio_array)), audio_array).astype(np.float32)
 
         return self._write_wav_bytes(audio_array, self._sample_rate)
 

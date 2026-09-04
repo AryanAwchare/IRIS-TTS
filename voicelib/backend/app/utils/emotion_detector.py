@@ -95,6 +95,73 @@ EMOTION_LEXICON: Dict[str, Dict[str, Any]] = {
     "oh my god": {"emotion": "surprised", "valence": 0.3, "arousal": 0.9, "intensity": 0.9, "tag": "[gasp]"},
 }
 
+# Stem and Prefix matching lexicon for robust grammatical inflections
+EMOTION_ROOTS: Dict[str, Dict[str, Any]] = {
+    # Happy / Joy / Warmth
+    "happ": {"emotion": "happy", "valence": 0.8, "arousal": 0.6, "intensity": 0.8},
+    "joy": {"emotion": "happy", "valence": 0.9, "arousal": 0.7, "intensity": 0.9},
+    "glad": {"emotion": "happy", "valence": 0.7, "arousal": 0.4, "intensity": 0.6},
+    "wonder": {"emotion": "happy", "valence": 0.85, "arousal": 0.65, "intensity": 0.85},
+    "delight": {"emotion": "happy", "valence": 0.9, "arousal": 0.6, "intensity": 0.85},
+    "cheer": {"emotion": "happy", "valence": 0.8, "arousal": 0.6, "intensity": 0.8},
+    "love": {"emotion": "happy", "valence": 0.9, "arousal": 0.5, "intensity": 0.8},
+    "laugh": {"emotion": "happy", "valence": 0.8, "arousal": 0.8, "intensity": 0.9, "tag": "[laughter]"},
+    "smile": {"emotion": "happy", "valence": 0.7, "arousal": 0.4, "intensity": 0.6},
+    "congrat": {"emotion": "happy", "valence": 0.8, "arousal": 0.7, "intensity": 0.85},
+
+    # Sad / Melancholy
+    "sad": {"emotion": "sad", "valence": -0.8, "arousal": -0.5, "intensity": 0.8},
+    "depress": {"emotion": "sad", "valence": -0.9, "arousal": -0.7, "intensity": 0.9},
+    "heartbreak": {"emotion": "sad", "valence": -0.9, "arousal": -0.6, "intensity": 0.95},
+    "sorrow": {"emotion": "sad", "valence": -0.9, "arousal": -0.4, "intensity": 0.85},
+    "grief": {"emotion": "sad", "valence": -0.9, "arousal": -0.6, "intensity": 0.9},
+    "cry": {"emotion": "sad", "valence": -0.9, "arousal": -0.3, "intensity": 0.85},
+    "tear": {"emotion": "sad", "valence": -0.7, "arousal": -0.3, "intensity": 0.7},
+    "lonel": {"emotion": "sad", "valence": -0.7, "arousal": -0.5, "intensity": 0.75},
+    "unfortunat": {"emotion": "sad", "valence": -0.6, "arousal": -0.3, "intensity": 0.6, "tag": "[sigh]"},
+
+    # Angry / Frustrated
+    "angr": {"emotion": "angry", "valence": -0.8, "arousal": 0.8, "intensity": 0.85},
+    "furious": {"emotion": "angry", "valence": -0.9, "arousal": 0.95, "intensity": 0.95},
+    "frustrat": {"emotion": "angry", "valence": -0.7, "arousal": 0.6, "intensity": 0.75},
+    "outrag": {"emotion": "angry", "valence": -0.9, "arousal": 0.9, "intensity": 0.9},
+    "hate": {"emotion": "angry", "valence": -0.9, "arousal": 0.7, "intensity": 0.85},
+    "annoy": {"emotion": "angry", "valence": -0.6, "arousal": 0.5, "intensity": 0.65},
+    "terribl": {"emotion": "angry", "valence": -0.8, "arousal": 0.6, "intensity": 0.75},
+    "horribl": {"emotion": "angry", "valence": -0.8, "arousal": 0.6, "intensity": 0.75},
+
+    # Excited / Thrilled
+    "excit": {"emotion": "excited", "valence": 0.8, "arousal": 0.9, "intensity": 0.9},
+    "amaz": {"emotion": "excited", "valence": 0.9, "arousal": 0.8, "intensity": 0.85},
+    "awesom": {"emotion": "excited", "valence": 0.8, "arousal": 0.8, "intensity": 0.8},
+    "incredibl": {"emotion": "excited", "valence": 0.9, "arousal": 0.85, "intensity": 0.9},
+    "unbeliev": {"emotion": "excited", "valence": 0.7, "arousal": 0.9, "intensity": 0.85},
+    "fantast": {"emotion": "excited", "valence": 0.9, "arousal": 0.8, "intensity": 0.85},
+
+    # Calm / Serene
+    "calm": {"emotion": "calm", "valence": 0.5, "arousal": -0.7, "intensity": 0.7},
+    "peace": {"emotion": "calm", "valence": 0.7, "arousal": -0.8, "intensity": 0.8},
+    "relax": {"emotion": "calm", "valence": 0.6, "arousal": -0.7, "intensity": 0.7},
+    "quiet": {"emotion": "calm", "valence": 0.4, "arousal": -0.8, "intensity": 0.6},
+    "gentl": {"emotion": "calm", "valence": 0.6, "arousal": -0.6, "intensity": 0.65},
+    "whisper": {"emotion": "calm", "valence": 0.3, "arousal": -0.8, "intensity": 0.7, "tag": "[whisper]"},
+
+    # Fearful / Anxious
+    "fear": {"emotion": "fearful", "valence": -0.8, "arousal": 0.8, "intensity": 0.85},
+    "scar": {"emotion": "fearful", "valence": -0.7, "arousal": 0.8, "intensity": 0.8},
+    "afraid": {"emotion": "fearful", "valence": -0.7, "arousal": 0.7, "intensity": 0.75},
+    "terrifi": {"emotion": "fearful", "valence": -0.9, "arousal": 0.9, "intensity": 0.95},
+    "anxi": {"emotion": "fearful", "valence": -0.6, "arousal": 0.6, "intensity": 0.7},
+    "nervous": {"emotion": "fearful", "valence": -0.5, "arousal": 0.6, "intensity": 0.65},
+    "panic": {"emotion": "fearful", "valence": -0.8, "arousal": 0.9, "intensity": 0.9},
+
+    # Disgusted / Contempt
+    "disgust": {"emotion": "disgusted", "valence": -0.8, "arousal": 0.3, "intensity": 0.8},
+    "gross": {"emotion": "disgusted", "valence": -0.7, "arousal": 0.3, "intensity": 0.75},
+    "nauseat": {"emotion": "disgusted", "valence": -0.8, "arousal": 0.4, "intensity": 0.85},
+    "revolting": {"emotion": "disgusted", "valence": -0.85, "arousal": 0.5, "intensity": 0.9},
+}
+
 # Base emotion hyperparameters (From IRIS Research Paper Table I & Chatterbox best practices)
 BASE_EMOTION_TABLE: Dict[str, Dict[str, float]] = {
     "neutral":   {"cfg": 0.65, "exag": 0.05, "speed": 1.00, "pitch": 0.0},
@@ -103,7 +170,8 @@ BASE_EMOTION_TABLE: Dict[str, Dict[str, float]] = {
     "excited":   {"cfg": 0.52, "exag": 0.28, "speed": 1.18, "pitch": 2.2},
     "sad":       {"cfg": 0.65, "exag": 0.08, "speed": 0.88, "pitch": -1.4},
     "angry":     {"cfg": 0.55, "exag": 0.22, "speed": 1.12, "pitch": 1.2},
-    "fearful":   {"cfg": 0.58, "exag": 0.18, "speed": 1.10, "pitch": 1.8},
+    "fearful":   {"cfg": 0.58, "exag": 0.18, "speed": 1.10, "pitch": 1.4},
+    "disgusted": {"cfg": 0.58, "exag": 0.10, "speed": 0.95, "pitch": -0.3},
     "surprised": {"cfg": 0.52, "exag": 0.24, "speed": 1.08, "pitch": 2.5},
 }
 
@@ -153,14 +221,23 @@ def analyze_text_emotion(text: str) -> Dict[str, Any]:
             if "tag" in meta and meta["tag"] not in suggested_tags:
                 suggested_tags.append(meta["tag"])
 
-    # Single-word lexicon scanning
+    # Single-word lexicon and stem root scanning
     for w in words:
+        meta = None
         if w in EMOTION_LEXICON:
             meta = EMOTION_LEXICON[w]
+        else:
+            for root, r_meta in EMOTION_ROOTS.items():
+                if w.startswith(root):
+                    meta = r_meta
+                    break
+
+        if meta:
             emo = meta["emotion"]
-            scores[emo] += meta["intensity"]
-            valence_sum += meta["valence"]
-            arousal_sum += meta["arousal"]
+            if emo in scores:
+                scores[emo] += meta.get("intensity", 0.75)
+            valence_sum += meta.get("valence", 0.0)
+            arousal_sum += meta.get("arousal", 0.0)
             match_count += 1
             if "tag" in meta and meta["tag"] not in suggested_tags:
                 suggested_tags.append(meta["tag"])

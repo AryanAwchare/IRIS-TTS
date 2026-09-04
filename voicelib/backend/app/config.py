@@ -47,7 +47,7 @@ try:
         colab_gpu_api_url: str = Field(default="http://localhost:8008", alias="COLAB_GPU_API_URL")
         colab_register_secret: str = Field(default="voicelib-colab-dev-secret", alias="COLAB_REGISTER_SECRET")
         voice_similarity_threshold: float = Field(default=60.0, alias="VOICE_SIMILARITY_THRESHOLD")
-        
+
         # Audio Limits & Formats
         min_sample_duration_seconds: float = Field(default=3.0, alias="MIN_SAMPLE_DURATION_SECONDS")
         max_sample_duration_seconds: float = Field(default=300.0, alias="MAX_SAMPLE_DURATION_SECONDS")
@@ -75,10 +75,11 @@ try:
         vite_api_base_url: str = Field(default="http://localhost:8000", alias="VITE_API_BASE_URL")
 
 except ImportError:
-    # Fallback if pydantic-settings is not installed
+    # Fallback if pydantic-settings is not installed.
+    # FIX: all defaults now match the pydantic-settings branch exactly.
     from pydantic import BaseModel
 
-    class Settings(BaseModel):
+    class Settings(BaseModel):  # type: ignore[no-redef]
         database_url: str = os.getenv("DATABASE_URL", "sqlite+aiosqlite:///./voicelib_dev.db")
         storage_endpoint_url: str = os.getenv("STORAGE_ENDPOINT_URL", "")
         storage_access_key: str = os.getenv("STORAGE_ACCESS_KEY", "local")
@@ -97,9 +98,10 @@ except ImportError:
         colab_register_secret: str = os.getenv("COLAB_REGISTER_SECRET", "voicelib-colab-dev-secret")
         voice_similarity_threshold: float = float(os.getenv("VOICE_SIMILARITY_THRESHOLD", "60.0"))
 
+        # FIX: defaults now match pydantic-settings branch (was 120s / 20MB — inconsistent)
         min_sample_duration_seconds: float = float(os.getenv("MIN_SAMPLE_DURATION_SECONDS", "3.0"))
-        max_sample_duration_seconds: float = float(os.getenv("MAX_SAMPLE_DURATION_SECONDS", "120.0"))
-        max_upload_size_bytes: int = int(os.getenv("MAX_UPLOAD_SIZE_BYTES", "20971520"))
+        max_sample_duration_seconds: float = float(os.getenv("MAX_SAMPLE_DURATION_SECONDS", "300.0"))
+        max_upload_size_bytes: int = int(os.getenv("MAX_UPLOAD_SIZE_BYTES", "104857600"))
         allowed_audio_formats: List[str] = [
             "audio/wav", "audio/mpeg", "audio/mp3", "audio/x-mp3",
             "audio/mpeg3", "audio/x-mpeg-3", "audio/x-mpeg", "audio/ogg",
@@ -107,6 +109,13 @@ except ImportError:
             "audio/m4a", "audio/x-m4a", "audio/aac",
             "application/octet-stream", "binary/octet-stream"
         ]
+
+        # FIX: added missing fields that are accessed via getattr() in production code
+        emotion_detection_enabled: bool = os.getenv("EMOTION_DETECTION_ENABLED", "true").lower() in ("true", "1")
+        emotion_blend_mode: str = os.getenv("EMOTION_BLEND_MODE", "auto")
+        emotion_model_name: str = os.getenv(
+            "EMOTION_MODEL_NAME", "j-hartmann/emotion-english-distilroberta-base"
+        )
         vite_api_base_url: str = os.getenv("VITE_API_BASE_URL", "http://localhost:8000")
 
 

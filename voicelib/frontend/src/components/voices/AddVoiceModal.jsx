@@ -12,7 +12,9 @@ const MAX_NAME = 100
 export function AddVoiceModal({ isOpen, onClose }) {
   const addVoice = useVoiceStore((s) => s.addVoice)
 
+  const [inputMode, setInputMode]   = useState('file') // 'file' | 'youtube'
   const [file, setFile]             = useState(null)
+  const [youtubeUrl, setYoutubeUrl] = useState('')
   const [name, setName]             = useState('')
   const [promptText, setPromptText] = useState('')
   const [promptLang, setPromptLang] = useState('en')
@@ -20,11 +22,20 @@ export function AddVoiceModal({ isOpen, onClose }) {
   const [state, setState]           = useState('idle') // idle | uploading | success
   const [error, setError]           = useState(null)
 
-  const canSubmit = file && name.trim().length > 0 && consent && state === 'idle'
+  const hasSource = inputMode === 'file' ? !!file : youtubeUrl.trim().length > 0
+  const canSubmit = hasSource && name.trim().length > 0 && consent && state === 'idle'
 
   const handleClose = () => {
     if (state === 'uploading') return
-    setFile(null); setName(''); setPromptText(''); setPromptLang('en'); setConsent(false); setState('idle'); setError(null)
+    setInputMode('file')
+    setFile(null)
+    setYoutubeUrl('')
+    setName('')
+    setPromptText('')
+    setPromptLang('en')
+    setConsent(false)
+    setState('idle')
+    setError(null)
     onClose()
   }
 
@@ -35,7 +46,11 @@ export function AddVoiceModal({ isOpen, onClose }) {
     setState('uploading')
 
     const fd = new FormData()
-    fd.append('file', file)
+    if (inputMode === 'file' && file) {
+      fd.append('file', file)
+    } else if (inputMode === 'youtube') {
+      fd.append('youtube_url', youtubeUrl.trim())
+    }
     fd.append('name', name.trim())
     fd.append('prompt_text', promptText.trim())
     fd.append('prompt_lang', promptLang)
@@ -53,16 +68,70 @@ export function AddVoiceModal({ isOpen, onClose }) {
   }
 
   return (
-    <Modal isOpen={isOpen} onClose={handleClose} title="Add a Voice" size="md">
+    <Modal isOpen={isOpen} onClose={handleClose} title="Add Voice to Library" size="md">
       <form onSubmit={handleSubmit} className="space-y-5">
         {/* Error */}
         <ErrorBanner message={error} onDismiss={() => setError(null)} />
 
-        {/* Dropzone */}
+        {/* Source Mode Selector (Upload vs YouTube) */}
         <div>
-          <label className="label">Voice Sample</label>
-          <Dropzone onFileAccepted={setFile} />
+          <label className="label">Voice Source Method</label>
+          <div className="grid grid-cols-2 gap-2 p-1 bg-surface-900/80 rounded-xl border border-white/10">
+            <button
+              type="button"
+              onClick={() => setInputMode('file')}
+              className={`py-2.5 px-3 rounded-lg text-sm font-bold transition-all duration-200 flex items-center justify-center gap-2 ${
+                inputMode === 'file'
+                  ? 'bg-cyber-yellow text-black shadow-glow-yellow'
+                  : 'text-surface-300 hover:text-white hover:bg-white/5'
+              }`}
+            >
+              <span>📁</span> Upload Audio
+            </button>
+            <button
+              type="button"
+              onClick={() => setInputMode('youtube')}
+              className={`py-2.5 px-3 rounded-lg text-sm font-bold transition-all duration-200 flex items-center justify-center gap-2 ${
+                inputMode === 'youtube'
+                  ? 'bg-red-500 text-white shadow-lg shadow-red-500/30'
+                  : 'text-surface-300 hover:text-white hover:bg-white/5'
+              }`}
+            >
+              <span>📺</span> YouTube Link
+            </button>
+          </div>
         </div>
+
+        {/* Audio Input: File Dropzone OR YouTube Link */}
+        {inputMode === 'file' ? (
+          <div>
+            <label className="label">Voice Audio Sample (WAV / MP3)</label>
+            <Dropzone onFileAccepted={setFile} />
+          </div>
+        ) : (
+          <div>
+            <label htmlFor="youtube-url" className="label">
+              YouTube Video or Song URL
+            </label>
+            <p className="text-xs text-surface-300 mb-2 font-mono">
+              // Neural stem extractor will automatically download and isolate the speaker's vocals.
+            </p>
+            <input
+              id="youtube-url"
+              type="url"
+              className="input font-mono text-sm text-cyber-cyan placeholder:text-surface-500 border-white/20 focus:border-red-400"
+              placeholder="https://www.youtube.com/watch?v=..."
+              value={youtubeUrl}
+              onChange={(e) => {
+                setYoutubeUrl(e.target.value)
+                if (!name && e.target.value) {
+                  setName('YouTube Voice')
+                }
+              }}
+              disabled={state === 'uploading'}
+            />
+          </div>
+        )}
 
         {/* Voice name */}
         <div>

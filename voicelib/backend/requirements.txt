@@ -24,5 +24,9 @@ faster-whisper>=1.0.0
 jiwer>=3.0.0
 silero-vad>=5.1.0
 onnxruntime>=1.17.0
+torch>=2.0.0
+transformers>=4.36.0
+yt-dlp>=2024.3.10
+demucs>=4.0.0
 
 
